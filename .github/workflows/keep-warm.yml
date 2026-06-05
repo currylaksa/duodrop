@@ -1,0 +1,14 @@
+# Keep-warm pinger (ADR 0002): defeats the Render free-tier idle spin-down so the first
+# pairing after a lull doesn't hit a ~30–50s cold start. Set the repo secret
+# SIGNALING_HEALTH_URL to https://<your-render-host>/health.
+name: keep-warm
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: curl -fsS --max-time 30 "${{ secrets.SIGNALING_HEALTH_URL }}" || true

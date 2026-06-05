@@ -1,0 +1,18 @@
+{
+  "name": "DuoDrop — secure P2P file transfer",
+  "short_name": "DuoDrop",
+  "description": "Zero-trust, end-to-end encrypted, peer-to-peer file transfer over WebRTC.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0A0B0D",
+  "theme_color": "#0A0B0D",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

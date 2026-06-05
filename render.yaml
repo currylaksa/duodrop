@@ -1,0 +1,16 @@
+# Render blueprint for the signaling server (ADR 0002). Free tier; Render injects PORT and
+# provides automatic HTTPS/WSS. The Cloudflare TURN secrets are set in the dashboard, not here.
+services:
+  - type: web
+    name: duodrop-signaling
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm run server
+    healthCheckPath: /health
+    envVars:
+      - key: CF_TURN_KEY_ID
+        sync: false
+      - key: CF_TURN_API_TOKEN
+        sync: false
