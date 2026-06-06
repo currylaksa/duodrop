@@ -8,6 +8,8 @@ import {
   parseShareLink,
 } from '../shared/src/pairing';
 import { DuoDropController, type TransferItem } from './controller';
+import { QrCode } from './QrCode';
+import { QrScanner } from './QrScanner';
 
 type View = 'home' | 'create' | 'join' | 'xfer';
 
@@ -32,36 +34,6 @@ function percent(item: TransferItem): number {
   if (item.status === 'done') return 100;
   if (item.size === 0) return 100;
   return Math.min(100, Math.floor((item.transferred / item.size) * 100));
-}
-
-/** Decorative QR placeholder — real QR generation/scanning is a later slice. */
-function decorativeQr(): boolean[] {
-  const N = 25;
-  let seed = 20260605;
-  const rnd = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-  };
-  const inFinder = (r: number, c: number) => {
-    const box = (R: number, C: number) => {
-      const rr = r - R;
-      const cc = c - C;
-      return (
-        rr >= 0 && rr < 7 && cc >= 0 && cc < 7 &&
-        (rr === 0 || rr === 6 || cc === 0 || cc === 6 || (rr >= 2 && rr <= 4 && cc >= 2 && cc <= 4))
-      );
-    };
-    return box(0, 0) || box(0, N - 7) || box(N - 7, 0);
-  };
-  const finderZone = (r: number, c: number) =>
-    (r < 7 && c < 7) || (r < 7 && c > N - 8) || (r > N - 8 && c < 7);
-  const cells: boolean[] = [];
-  for (let r = 0; r < N; r++) {
-    for (let c = 0; c < N; c++) {
-      cells.push(finderZone(r, c) ? inFinder(r, c) : rnd() > 0.52);
-    }
-  }
-  return cells;
 }
 
 function ConnectOverlay({ onDone }: { onDone: () => void }) {
@@ -112,6 +84,7 @@ export function App() {
   const [connecting, setConnecting] = useState(false);
   const [drag, setDrag] = useState(false);
   const [codeInput, setCodeInput] = useState('');
+  const [scanning, setScanning] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
 
@@ -312,15 +285,11 @@ export function App() {
                 <div className="panel">
                   <div className="panel-h">
                     <span className="lbl">Scan to join</span>
-                    <span className="lbl">soon</span>
+                    <span className="tag ok">same secret</span>
                   </div>
                   <div className="qrwrap">
-                    <div className="qr">
-                      {decorativeQr().map((on, i) => (
-                        <i key={i} className={on ? 'on' : ''} />
-                      ))}
-                    </div>
-                    <div className="qr-cap">type the code · or open the link</div>
+                    {secret && <QrCode text={buildShareLink(secret, location.origin)} />}
+                    <div className="qr-cap">scan · type the code · or open the link</div>
                   </div>
                 </div>
               </div>
@@ -351,7 +320,19 @@ export function App() {
                 <button className="btn btn-signal" onClick={joinWithCode}>
                   Connect
                 </button>
+                <button className="btn btn-ghost" onClick={() => setScanning((on) => !on)}>
+                  {scanning ? 'Hide scanner' : 'Scan QR'}
+                </button>
               </div>
+              {scanning && (
+                <QrScanner
+                  onSecret={(s) => {
+                    setScanning(false);
+                    void beginSession(s);
+                  }}
+                  onCancel={() => setScanning(false)}
+                />
+              )}
               <div className="or">or open the share link directly</div>
               <div style={{ marginTop: 36 }}>
                 <button className="btn btn-ghost" onClick={() => setView('home')}>
