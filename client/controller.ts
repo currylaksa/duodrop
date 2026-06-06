@@ -14,7 +14,7 @@ import { createRtcConnection, type TransferChannel } from './peer-connection';
 import { createSignalLink } from './signal-socket';
 import { fetchIceServers } from './ice';
 import { signalWsUrl } from './config';
-import { downloadBytes } from './download';
+import { createReceiveSink, type ReceiveSink, BLOB_FALLBACK_CAP } from './receive-sink';
 
 export type Direction = 'send' | 'receive';
 export type ItemStatus = 'active' | 'done';
@@ -33,6 +33,7 @@ export interface ControllerHandlers {
   onItemAdd(item: TransferItem): void;
   onItemProgress(id: string, transferred: number): void;
   onItemDone(id: string): void;
+  onWarn?(message: string): void;
 }
 
 let counter = 0;
@@ -63,6 +64,11 @@ export class DuoDropController {
   private onConnected(): void {
     const transfer = this.transfer!;
     let receiveId = '';
+    // The sink (disk stream or in-memory blob) is opened when the file starts; chunks arrive
+    // synchronously but write asynchronously, so a promise chain keeps writes ordered and the
+    // close after the last write.
+    let sinkReady: Promise<ReceiveSink> | null = null;
+    let writeChain: Promise<void> = Promise.resolve();
     const receiver = new EncryptedReceiver(this.key!, {
       onStart: (meta) => {
         receiveId = uid();
@@ -74,11 +80,27 @@ export class DuoDropController {
           transferred: 0,
           status: 'active',
         });
+        sinkReady = createReceiveSink(meta).then((sink) => {
+          if (sink.mode === 'blob' && meta.size > BLOB_FALLBACK_CAP) {
+            this.handlers.onWarn?.(
+              `Large file — this browser saves it in memory, which may strain the tab.`,
+            );
+          }
+          return sink;
+        });
       },
       onProgress: (received) => this.handlers.onItemProgress(receiveId, received),
-      onComplete: (meta, bytes) => {
-        downloadBytes(meta, bytes);
-        this.handlers.onItemDone(receiveId);
+      onChunk: (plain) => {
+        const ready = sinkReady!;
+        writeChain = writeChain.then(() => ready).then((sink) => sink.write(plain));
+      },
+      onComplete: () => {
+        const id = receiveId;
+        const ready = sinkReady!;
+        writeChain = writeChain
+          .then(() => ready)
+          .then((sink) => sink.close())
+          .then(() => this.handlers.onItemDone(id));
       },
     });
     // The session's "hello" rides the same channel as a string; the receiver ignores it.

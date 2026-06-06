@@ -142,10 +142,11 @@ export function App() {
         setItems((prev) =>
           prev.map((i) => (i.id === id ? { ...i, status: 'done' as const, transferred: i.size } : i)),
         ),
+      onWarn: (message) => toast(message),
     });
     controllerRef.current = controller;
     await controller.start();
-  }, []);
+  }, [toast]);
 
   // Joining peer: the secret is in the share link's #fragment.
   useEffect(() => {

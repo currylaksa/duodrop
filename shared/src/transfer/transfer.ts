@@ -31,6 +31,13 @@ export function* frameTransfer(
 export interface TransferHandlers {
   onStart?: (meta: FileMeta) => void;
   onProgress?: (received: number, total: number) => void;
+  /**
+   * Streaming sink: called with each decrypted chunk as it arrives. When provided, the
+   * receiver does not buffer the whole file in memory (phase 3) — it forwards chunks for the
+   * consumer to write to disk. `onComplete` still fires to signal end-of-stream (with empty
+   * bytes). When absent, the receiver buffers and `onComplete` carries the full file.
+   */
+  onChunk?: (plain: Uint8Array) => void;
   onComplete?: (meta: FileMeta, bytes: Uint8Array) => void;
 }
 

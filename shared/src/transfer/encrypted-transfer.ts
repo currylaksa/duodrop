@@ -12,6 +12,8 @@ import type { FileMeta, TransferMessage, TransferHandlers } from './transfer';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const EMPTY = new Uint8Array(0);
+
 const DEFAULT_CHUNK_SIZE = 16 * 1024;
 const DEFAULT_HIGH_WATER_MARK = 1024 * 1024;
 
@@ -77,9 +79,15 @@ export class EncryptedReceiver {
       if (final) this.handlers.onComplete?.(this.meta, new Uint8Array(0));
       return;
     }
-    this.chunks.push(plain);
     this.received += plain.length;
     this.handlers.onProgress?.(this.received, this.meta.size);
+    if (this.handlers.onChunk) {
+      // Streaming sink (phase 3): forward each chunk; never buffer the whole file.
+      this.handlers.onChunk(plain);
+      if (final) this.handlers.onComplete?.(this.meta, EMPTY);
+      return;
+    }
+    this.chunks.push(plain);
     if (final) this.handlers.onComplete?.(this.meta, concat(this.chunks));
   }
 }
