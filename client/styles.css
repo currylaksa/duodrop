@@ -196,11 +196,16 @@ body::after{
 .file .sub .stat.tx{color:var(--signal)}
 .file .sub .stat.rx{color:var(--amber)}
 .file .sub .stat.done{color:var(--signal)}
+.file .sub .stat.err{color:var(--danger)}
+.file .sub .speed{color:var(--fg-dim)}
+.file.err{border-color:rgba(255,95,86,.4)}
 .track{height:5px;border-radius:3px;background:var(--ink-3);margin-top:10px;overflow:hidden;position:relative}
 .track .fill{height:100%;background:linear-gradient(90deg,var(--signal),var(--signal-2));border-radius:3px;width:0;box-shadow:0 0 12px var(--signal-glow);transition:width .25s linear}
+.track.err .fill{background:var(--danger);box-shadow:none}
 .file .right{text-align:right;font-family:var(--mono);font-size:11px;color:var(--fg)}
 .file .right .pct{font-size:14px;font-weight:600}
 .file .check{color:var(--signal);font-size:18px}
+.file .xmark{color:var(--danger);font-size:18px}
 
 .creed{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0 28px;border-top:1px solid var(--line);flex-wrap:wrap;
   padding-bottom:max(28px,env(safe-area-inset-bottom))}

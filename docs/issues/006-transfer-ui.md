@@ -19,12 +19,12 @@ End-to-end behavior:
 
 ## Acceptance criteria
 
-- [ ] Files can be added by drag-drop and by picker; sending works in both directions.
-- [ ] Queueing several files sends them sequentially without re-pairing.
-- [ ] Both ends show live per-file progress and transfer speed.
-- [ ] Connection state and success/error states are clearly surfaced.
-- [ ] Backgrounding the tab mid-transfer warns the user.
-- [ ] Layout is usable on both a phone and a desktop viewport.
+- [x] Files can be added by drag-drop and by picker; sending works in both directions.
+- [x] Queueing several files sends them sequentially without re-pairing.
+- [x] Both ends show live per-file progress and transfer speed.
+- [x] Connection state and success/error states are clearly surfaced.
+- [x] Backgrounding the tab mid-transfer warns the user.
+- [x] Layout is usable on both a phone and a desktop viewport.
 
 ## Blocked by
 

@@ -15,9 +15,10 @@ import { createSignalLink } from './signal-socket';
 import { fetchIceServers } from './ice';
 import { signalWsUrl } from './config';
 import { createReceiveSink, type ReceiveSink, BLOB_FALLBACK_CAP } from './receive-sink';
+import { SpeedSampler } from './speed';
 
 export type Direction = 'send' | 'receive';
-export type ItemStatus = 'active' | 'done';
+export type ItemStatus = 'active' | 'done' | 'error';
 
 export interface TransferItem {
   id: string;
@@ -26,13 +27,16 @@ export interface TransferItem {
   direction: Direction;
   transferred: number;
   status: ItemStatus;
+  speed: number;
+  error?: string;
 }
 
 export interface ControllerHandlers {
   onConnected(): void;
   onItemAdd(item: TransferItem): void;
-  onItemProgress(id: string, transferred: number): void;
+  onItemProgress(id: string, transferred: number, speed: number): void;
   onItemDone(id: string): void;
+  onItemError(id: string, message: string): void;
   onWarn?(message: string): void;
 }
 
@@ -64,6 +68,7 @@ export class DuoDropController {
   private onConnected(): void {
     const transfer = this.transfer!;
     let receiveId = '';
+    let speed = new SpeedSampler();
     // The sink (disk stream or in-memory blob) is opened when the file starts; chunks arrive
     // synchronously but write asynchronously, so a promise chain keeps writes ordered and the
     // close after the last write.
@@ -72,6 +77,7 @@ export class DuoDropController {
     const receiver = new EncryptedReceiver(this.key!, {
       onStart: (meta) => {
         receiveId = uid();
+        speed = new SpeedSampler();
         this.handlers.onItemAdd({
           id: receiveId,
           name: meta.name,
@@ -79,6 +85,7 @@ export class DuoDropController {
           direction: 'receive',
           transferred: 0,
           status: 'active',
+          speed: 0,
         });
         sinkReady = createReceiveSink(meta).then((sink) => {
           if (sink.mode === 'blob' && meta.size > BLOB_FALLBACK_CAP) {
@@ -89,7 +96,8 @@ export class DuoDropController {
           return sink;
         });
       },
-      onProgress: (received) => this.handlers.onItemProgress(receiveId, received),
+      onProgress: (received) =>
+        this.handlers.onItemProgress(receiveId, received, speed.sample(performance.now(), received)),
       onChunk: (plain) => {
         const ready = sinkReady!;
         writeChain = writeChain.then(() => ready).then((sink) => sink.write(plain));
@@ -104,7 +112,15 @@ export class DuoDropController {
       },
     });
     // The session's "hello" rides the same channel as a string; the receiver ignores it.
-    transfer.onMessage((message) => receiver.accept(message));
+    // A decrypt/parse failure means a corrupt or tampered stream — surface it on the
+    // in-flight item rather than letting the rejection go unhandled.
+    transfer.onMessage((message) => {
+      try {
+        receiver.accept(message);
+      } catch {
+        if (receiveId) this.handlers.onItemError(receiveId, 'Transfer failed — stream could not be decrypted');
+      }
+    });
     this.handlers.onConnected();
   }
 
@@ -121,14 +137,23 @@ export class DuoDropController {
         direction: 'send',
         transferred: 0,
         status: 'active',
+        speed: 0,
       });
-      const bytes = new Uint8Array(await file.arrayBuffer());
+      const speed = new SpeedSampler();
       const meta: FileMeta = { name: file.name, size: file.size, type: file.type };
-      // A fresh encryptor per file: each Transfer is its own one-directional stream.
-      await sendEncryptedFile(transfer, createEncryptor(key), meta, bytes, {
-        onProgress: (sent) => this.handlers.onItemProgress(id, sent),
-      });
-      this.handlers.onItemDone(id);
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        // A fresh encryptor per file: each Transfer is its own one-directional stream.
+        await sendEncryptedFile(transfer, createEncryptor(key), meta, bytes, {
+          onProgress: (sent) =>
+            this.handlers.onItemProgress(id, sent, speed.sample(performance.now(), sent)),
+        });
+        this.handlers.onItemDone(id);
+      } catch (err) {
+        // A send failure means the channel is down; stop the queue rather than hammering it.
+        this.handlers.onItemError(id, err instanceof Error ? err.message : 'Transfer failed');
+        break;
+      }
     }
   }
 }

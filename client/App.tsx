@@ -25,6 +25,10 @@ function fmtBytes(n: number): string {
   return `${value.toFixed(1)} ${units[i]}`;
 }
 
+function fmtSpeed(bps: number): string {
+  return `${fmtBytes(Math.max(0, bps))}/s`;
+}
+
 function fileTag(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot + 1, dot + 5).toUpperCase() : 'BIN';
@@ -109,12 +113,22 @@ export function App() {
     const controller = new DuoDropController(s, {
       onConnected: () => setConnecting(true),
       onItemAdd: (item) => setItems((prev) => [item, ...prev]),
-      onItemProgress: (id, transferred) =>
-        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred } : i))),
+      onItemProgress: (id, transferred, speed) =>
+        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred, speed } : i))),
       onItemDone: (id) =>
         setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, status: 'done' as const, transferred: i.size } : i)),
+          prev.map((i) =>
+            i.id === id ? { ...i, status: 'done' as const, transferred: i.size, speed: 0 } : i,
+          ),
         ),
+      onItemError: (id, message) => {
+        setItems((prev) =>
+          prev.map((i) =>
+            i.id === id ? { ...i, status: 'error' as const, error: message, speed: 0 } : i,
+          ),
+        );
+        toast(message);
+      },
       onWarn: (message) => toast(message),
     });
     controllerRef.current = controller;
@@ -126,6 +140,20 @@ export function App() {
     const joining = parseShareLink(location.href);
     if (joining) void beginSession(joining);
   }, [beginSession]);
+
+  // Mobile resilience: a backgrounded tab can have its connection torn down mid-transfer,
+  // which drops us into the re-pair model. Warn while a transfer is still in flight.
+  const activeRef = useRef(false);
+  activeRef.current = items.some((i) => i.status === 'active');
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.hidden && activeRef.current) {
+        toast('Keep this tab in front — backgrounding can drop the transfer.');
+      }
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    return () => document.removeEventListener('visibilitychange', onHidden);
+  }, [toast]);
 
   const createChannel = useCallback(() => {
     void beginSession(generatePairingSecret());
@@ -396,7 +424,7 @@ export function App() {
 
               <div className="queue">
                 {items.map((item) => (
-                  <div className="file" key={item.id}>
+                  <div className={`file${item.status === 'error' ? ' err' : ''}`} key={item.id}>
                     <div className="ft">{fileTag(item.name)}</div>
                     <div className="meta">
                       <div className="name">{item.name}</div>
@@ -406,27 +434,36 @@ export function App() {
                           className={`stat ${
                             item.status === 'done'
                               ? 'done'
-                              : item.direction === 'send'
-                                ? 'tx'
-                                : 'rx'
+                              : item.status === 'error'
+                                ? 'err'
+                                : item.direction === 'send'
+                                  ? 'tx'
+                                  : 'rx'
                           }`}
                         >
                           {item.status === 'done'
                             ? item.direction === 'send'
                               ? '✓ delivered'
                               : '✓ received'
-                            : item.direction === 'send'
-                              ? '▸ sending'
-                              : '▾ receiving'}
+                            : item.status === 'error'
+                              ? '✕ failed'
+                              : item.direction === 'send'
+                                ? '▸ sending'
+                                : '▾ receiving'}
                         </span>
+                        {item.status === 'active' && item.speed > 0 && (
+                          <span className="speed">{fmtSpeed(item.speed)}</span>
+                        )}
                       </div>
-                      <div className="track">
+                      <div className={`track${item.status === 'error' ? ' err' : ''}`}>
                         <div className="fill" style={{ width: `${percent(item)}%` }} />
                       </div>
                     </div>
                     <div className="right">
                       {item.status === 'done' ? (
                         <div className="check">✓</div>
+                      ) : item.status === 'error' ? (
+                        <div className="xmark">✕</div>
                       ) : (
                         <div className="pct">{percent(item)}%</div>
                       )}
