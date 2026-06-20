@@ -8,6 +8,8 @@ import {
   parseShareLink,
 } from '../shared/src/pairing';
 import { DuoDropController, type TransferItem } from './controller';
+import { QrCode } from './QrCode';
+import { QrScanner } from './QrScanner';
 
 type View = 'home' | 'create' | 'join' | 'xfer';
 
@@ -23,6 +25,10 @@ function fmtBytes(n: number): string {
   return `${value.toFixed(1)} ${units[i]}`;
 }
 
+function fmtSpeed(bps: number): string {
+  return `${fmtBytes(Math.max(0, bps))}/s`;
+}
+
 function fileTag(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot >= 0 ? name.slice(dot + 1, dot + 5).toUpperCase() : 'BIN';
@@ -32,36 +38,6 @@ function percent(item: TransferItem): number {
   if (item.status === 'done') return 100;
   if (item.size === 0) return 100;
   return Math.min(100, Math.floor((item.transferred / item.size) * 100));
-}
-
-/** Decorative QR placeholder — real QR generation/scanning is a later slice. */
-function decorativeQr(): boolean[] {
-  const N = 25;
-  let seed = 20260605;
-  const rnd = () => {
-    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-    return seed / 0x7fffffff;
-  };
-  const inFinder = (r: number, c: number) => {
-    const box = (R: number, C: number) => {
-      const rr = r - R;
-      const cc = c - C;
-      return (
-        rr >= 0 && rr < 7 && cc >= 0 && cc < 7 &&
-        (rr === 0 || rr === 6 || cc === 0 || cc === 6 || (rr >= 2 && rr <= 4 && cc >= 2 && cc <= 4))
-      );
-    };
-    return box(0, 0) || box(0, N - 7) || box(N - 7, 0);
-  };
-  const finderZone = (r: number, c: number) =>
-    (r < 7 && c < 7) || (r < 7 && c > N - 8) || (r > N - 8 && c < 7);
-  const cells: boolean[] = [];
-  for (let r = 0; r < N; r++) {
-    for (let c = 0; c < N; c++) {
-      cells.push(finderZone(r, c) ? inFinder(r, c) : rnd() > 0.52);
-    }
-  }
-  return cells;
 }
 
 function ConnectOverlay({ onDone }: { onDone: () => void }) {
@@ -112,6 +88,7 @@ export function App() {
   const [connecting, setConnecting] = useState(false);
   const [drag, setDrag] = useState(false);
   const [codeInput, setCodeInput] = useState('');
+  const [scanning, setScanning] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
 
@@ -136,22 +113,47 @@ export function App() {
     const controller = new DuoDropController(s, {
       onConnected: () => setConnecting(true),
       onItemAdd: (item) => setItems((prev) => [item, ...prev]),
-      onItemProgress: (id, transferred) =>
-        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred } : i))),
+      onItemProgress: (id, transferred, speed) =>
+        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred, speed } : i))),
       onItemDone: (id) =>
         setItems((prev) =>
-          prev.map((i) => (i.id === id ? { ...i, status: 'done' as const, transferred: i.size } : i)),
+          prev.map((i) =>
+            i.id === id ? { ...i, status: 'done' as const, transferred: i.size, speed: 0 } : i,
+          ),
         ),
+      onItemError: (id, message) => {
+        setItems((prev) =>
+          prev.map((i) =>
+            i.id === id ? { ...i, status: 'error' as const, error: message, speed: 0 } : i,
+          ),
+        );
+        toast(message);
+      },
+      onWarn: (message) => toast(message),
     });
     controllerRef.current = controller;
     await controller.start();
-  }, []);
+  }, [toast]);
 
   // Joining peer: the secret is in the share link's #fragment.
   useEffect(() => {
     const joining = parseShareLink(location.href);
     if (joining) void beginSession(joining);
   }, [beginSession]);
+
+  // Mobile resilience: a backgrounded tab can have its connection torn down mid-transfer,
+  // which drops us into the re-pair model. Warn while a transfer is still in flight.
+  const activeRef = useRef(false);
+  activeRef.current = items.some((i) => i.status === 'active');
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.hidden && activeRef.current) {
+        toast('Keep this tab in front — backgrounding can drop the transfer.');
+      }
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    return () => document.removeEventListener('visibilitychange', onHidden);
+  }, [toast]);
 
   const createChannel = useCallback(() => {
     void beginSession(generatePairingSecret());
@@ -311,15 +313,11 @@ export function App() {
                 <div className="panel">
                   <div className="panel-h">
                     <span className="lbl">Scan to join</span>
-                    <span className="lbl">soon</span>
+                    <span className="tag ok">same secret</span>
                   </div>
                   <div className="qrwrap">
-                    <div className="qr">
-                      {decorativeQr().map((on, i) => (
-                        <i key={i} className={on ? 'on' : ''} />
-                      ))}
-                    </div>
-                    <div className="qr-cap">type the code · or open the link</div>
+                    {secret && <QrCode text={buildShareLink(secret, location.origin)} />}
+                    <div className="qr-cap">scan · type the code · or open the link</div>
                   </div>
                 </div>
               </div>
@@ -350,7 +348,19 @@ export function App() {
                 <button className="btn btn-signal" onClick={joinWithCode}>
                   Connect
                 </button>
+                <button className="btn btn-ghost" onClick={() => setScanning((on) => !on)}>
+                  {scanning ? 'Hide scanner' : 'Scan QR'}
+                </button>
               </div>
+              {scanning && (
+                <QrScanner
+                  onSecret={(s) => {
+                    setScanning(false);
+                    void beginSession(s);
+                  }}
+                  onCancel={() => setScanning(false)}
+                />
+              )}
               <div className="or">or open the share link directly</div>
               <div style={{ marginTop: 36 }}>
                 <button className="btn btn-ghost" onClick={() => setView('home')}>
@@ -414,7 +424,7 @@ export function App() {
 
               <div className="queue">
                 {items.map((item) => (
-                  <div className="file" key={item.id}>
+                  <div className={`file${item.status === 'error' ? ' err' : ''}`} key={item.id}>
                     <div className="ft">{fileTag(item.name)}</div>
                     <div className="meta">
                       <div className="name">{item.name}</div>
@@ -424,27 +434,36 @@ export function App() {
                           className={`stat ${
                             item.status === 'done'
                               ? 'done'
-                              : item.direction === 'send'
-                                ? 'tx'
-                                : 'rx'
+                              : item.status === 'error'
+                                ? 'err'
+                                : item.direction === 'send'
+                                  ? 'tx'
+                                  : 'rx'
                           }`}
                         >
                           {item.status === 'done'
                             ? item.direction === 'send'
                               ? '✓ delivered'
                               : '✓ received'
-                            : item.direction === 'send'
-                              ? '▸ sending'
-                              : '▾ receiving'}
+                            : item.status === 'error'
+                              ? '✕ failed'
+                              : item.direction === 'send'
+                                ? '▸ sending'
+                                : '▾ receiving'}
                         </span>
+                        {item.status === 'active' && item.speed > 0 && (
+                          <span className="speed">{fmtSpeed(item.speed)}</span>
+                        )}
                       </div>
-                      <div className="track">
+                      <div className={`track${item.status === 'error' ? ' err' : ''}`}>
                         <div className="fill" style={{ width: `${percent(item)}%` }} />
                       </div>
                     </div>
                     <div className="right">
                       {item.status === 'done' ? (
                         <div className="check">✓</div>
+                      ) : item.status === 'error' ? (
+                        <div className="xmark">✕</div>
                       ) : (
                         <div className="pct">{percent(item)}%</div>
                       )}

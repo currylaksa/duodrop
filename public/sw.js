@@ -8,7 +8,12 @@ self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim(
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
-  if (new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+  // Never cache dynamic endpoints. /ice-servers returns short-lived TURN credentials — a
+  // secret that also expires, so a stale cache hit would silently break the relay. /health is
+  // a liveness probe. Only the static app shell belongs in the cache (008, ADR 0002).
+  if (url.pathname === '/ice-servers' || url.pathname === '/health') return;
 
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
