@@ -10,8 +10,9 @@
 /** A message the server sends to a connected peer. SDP/ICE rides opaquely inside `signal`. */
 export type ServerMessage =
   | { type: 'ready'; initiator: boolean }
+  | { type: 'room-created'; code: string }
   | { type: 'signal'; data: unknown }
-  | { type: 'rejected'; reason: 'full' }
+  | { type: 'rejected'; reason: 'full' | 'unavailable' }
   | { type: 'peer-left' }
   | { type: 'expired' };
 
@@ -27,15 +28,48 @@ interface Room {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30_000;
 
+/** How many random draws to try before giving up on finding a free code (saturation guard). */
+const CODE_ALLOCATION_ATTEMPTS = 100;
+
+/** Default short-code generator for the SAS path: a 4-digit numeric, non-secret (ADR 0003). */
+const defaultGenerateCode = (): string =>
+  ((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 10_000).toString().padStart(4, '0');
+
 export class RoomRegistry {
-  /** Routing ID → the room currently matched on it. */
+  /** Routing ID (or server-allocated SAS code) → the room currently matched on it. */
   private readonly rooms = new Map<string, Room>();
   private readonly idleTimeoutMs: number;
   private readonly now: () => number;
+  private readonly generateCode: () => string;
 
-  constructor(opts: { idleTimeoutMs?: number; now?: () => number } = {}) {
+  constructor(
+    opts: { idleTimeoutMs?: number; now?: () => number; generateCode?: () => string } = {},
+  ) {
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.now = opts.now ?? Date.now;
+    this.generateCode = opts.generateCode ?? defaultGenerateCode;
+  }
+
+  /**
+   * Allocate a fresh short code and seat the creator in its room (SAS path, ADR 0003). The
+   * code is non-secret — security comes from the safety-string comparison, not its secrecy —
+   * so the server may hand it out. The joiner later pairs on it via the ordinary `join`.
+   */
+  createRoom(peer: Peer): void {
+    let code: string | null = null;
+    for (let attempt = 0; attempt < CODE_ALLOCATION_ATTEMPTS; attempt++) {
+      const candidate = this.generateCode();
+      if (!this.rooms.has(candidate)) {
+        code = candidate;
+        break;
+      }
+    }
+    if (code === null) {
+      peer.send({ type: 'rejected', reason: 'unavailable' });
+      return;
+    }
+    this.rooms.set(code, { peers: new Set([peer]), createdAt: this.now() });
+    peer.send({ type: 'room-created', code });
   }
 
   /** Add a peer to the room for this Routing ID, creating the room on first arrival. */

@@ -111,6 +111,67 @@ describe('signaling room logic (issue 001): rooms keyed on Routing ID', () => {
     expect(b.sent).toContainEqual({ type: 'signal', data: { sdp: 'offer' } });
   });
 
+  it('allocates a short code on create-room, then pairs a joiner who types it (SAS path, ADR 0003)', () => {
+    const rooms = new RoomRegistry({ generateCode: () => '8412' });
+    const creator = fakePeer();
+    const joiner = fakePeer();
+
+    rooms.createRoom(creator);
+    expect(creator.sent).toContainEqual({ type: 'room-created', code: '8412' });
+
+    // The joiner types the code, which is just a Routing ID for the existing join path.
+    rooms.join('8412', joiner);
+
+    // Room locks: the joiner initiates the offer, the waiting creator answers.
+    expect(joiner.sent).toContainEqual({ type: 'ready', initiator: true });
+    expect(creator.sent).toContainEqual({ type: 'ready', initiator: false });
+  });
+
+  it('never hands out a code that is already taken', () => {
+    const codes = ['8412', '8412', '5309']; // first two collide with a live room, third is free
+    const rooms = new RoomRegistry({ generateCode: () => codes.shift() ?? '0000' });
+    const first = fakePeer();
+    const second = fakePeer();
+
+    rooms.createRoom(first);
+    rooms.createRoom(second);
+
+    expect(first.sent).toContainEqual({ type: 'room-created', code: '8412' });
+    expect(second.sent).toContainEqual({ type: 'room-created', code: '5309' });
+  });
+
+  it('rejects room creation when no code is free after bounded retries', () => {
+    const rooms = new RoomRegistry({ generateCode: () => '8412' }); // every attempt collides
+    const first = fakePeer();
+    const second = fakePeer();
+
+    rooms.createRoom(first); // seats the only code
+    rooms.createRoom(second); // every retry hits the taken code
+
+    expect(second.sent).toContainEqual({ type: 'rejected', reason: 'unavailable' });
+  });
+
+  it('expires a created room that no one joins, freeing its code', () => {
+    const clock = { t: 0 };
+    const rooms = new RoomRegistry({
+      idleTimeoutMs: 1000,
+      now: () => clock.t,
+      generateCode: () => '8412',
+    });
+    const creator = fakePeer();
+
+    rooms.createRoom(creator);
+    clock.t = 1000; // the creator waited out the idle window with no joiner
+    rooms.sweepIdle();
+
+    expect(creator.sent).toContainEqual({ type: 'expired' });
+
+    // Code freed: a fresh create reuses it.
+    const next = fakePeer();
+    rooms.createRoom(next);
+    expect(next.sent).toContainEqual({ type: 'room-created', code: '8412' });
+  });
+
   it('never expires a locked two-peer room, however long it has been connected', () => {
     const clock = { t: 0 };
     const rooms = new RoomRegistry({ idleTimeoutMs: 1000, now: () => clock.t });
