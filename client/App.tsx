@@ -133,13 +133,30 @@ export function App() {
       onClosed: (message) => toast(message),
     });
     controllerRef.current = controller;
-    await controller.start();
+    try {
+      await controller.start();
+    } catch (err) {
+      // A start failure (blocked crypto, no ICE, dead socket) used to vanish as an unhandled
+      // rejection, leaving the UI stuck "waiting". Surface it and let the user retry.
+      startedRef.current = false;
+      toast(err instanceof Error ? `Couldn’t connect — ${err.message}` : 'Couldn’t connect');
+    }
   }, [toast]);
 
-  // Joining peer: the secret is in the share link's #fragment.
+  // Joining peer: the secret rides in the share link's #fragment. Handle both a fresh page load
+  // and a link pasted into the address bar of an already-open tab — a fragment-only change fires
+  // `hashchange` without a reload, so a one-shot mount read would silently miss it.
   useEffect(() => {
-    const joining = parseShareLink(location.href);
-    if (joining) void beginSession(joining);
+    const tryJoin = () => {
+      const joining = parseShareLink(location.href);
+      if (joining) {
+        setView('join');
+        void beginSession(joining);
+      }
+    };
+    tryJoin();
+    window.addEventListener('hashchange', tryJoin);
+    return () => window.removeEventListener('hashchange', tryJoin);
   }, [beginSession]);
 
   // Mobile resilience: a backgrounded tab can have its connection torn down mid-transfer,
@@ -162,14 +179,17 @@ export function App() {
   }, [beginSession]);
 
   const joinWithCode = useCallback(() => {
-    let s: Uint8Array;
-    try {
-      s = decodeSecret(codeInput);
-    } catch {
-      toast('Invalid pairing code');
-      return;
+    const text = codeInput.trim();
+    // Accept either a typed pairing code or a pasted share link — people paste the whole URL.
+    let s = text.includes('#') || text.includes('://') ? parseShareLink(text) : null;
+    if (!s) {
+      try {
+        s = decodeSecret(text);
+      } catch {
+        s = null;
+      }
     }
-    if (s.length !== 16) {
+    if (!s || s.length !== 16) {
       toast('Invalid pairing code');
       return;
     }
@@ -333,7 +353,7 @@ export function App() {
                 enter the pairing secret
               </div>
               <h2>Join a channel</h2>
-              <p>Type the code shown on the other device. Ambiguous characters are excluded.</p>
+              <p>Type the code from the other device — or paste the whole share link here.</p>
               <div className="codeinput">
                 <input
                   value={codeInput}
