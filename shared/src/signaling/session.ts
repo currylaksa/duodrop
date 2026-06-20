@@ -8,6 +8,13 @@
 
 import type { ClientMessage } from './protocol';
 import type { ServerMessage } from './rooms';
+import {
+  generateEphemeralKeyPair,
+  deriveSession,
+  encodePublicKey,
+  decodePublicKey,
+  type EphemeralKeyPair,
+} from '../pairing/sas';
 
 export type SessionDescription = { type: 'offer' | 'answer'; sdp: string };
 export type IceCandidate = Record<string, unknown>;
@@ -15,7 +22,8 @@ export type IceCandidate = Record<string, unknown>;
 /** The opaque payload the server relays inside a `signal`, exchanged peer-to-peer. */
 export type SignalPayload =
   | { kind: 'description'; description: SessionDescription }
-  | { kind: 'candidate'; candidate: IceCandidate };
+  | { kind: 'candidate'; candidate: IceCandidate }
+  | { kind: 'pubkey'; publicKey: string };
 
 /** The link to the signaling server. */
 export interface SignalLink {
@@ -41,14 +49,33 @@ export interface SessionHandlers {
   onHello?: (text: string) => void;
   /** The room ended before (or after) pairing: swept while waiting, peer gone, or full. */
   onClosed?: (reason: 'expired' | 'peer-left' | 'rejected') => void;
+  /** SAS path: the server allocated a short room code for the creator to read out. */
+  onRoomCreated?: (code: string) => void;
+  /** SAS path: the derived emoji safety string and session key (the humans compare the emoji). */
+  onSafetyString?: (safetyString: string[], sessionKey: Uint8Array) => void;
+}
+
+/**
+ * SAS short-code options (ADR 0003). Omitted entirely for the QR/long-link path, which keeps
+ * its plain join-and-handshake behaviour.
+ */
+export interface SessionOptions {
+  /** Run the SAS pubkey exchange on top of the WebRTC handshake. */
+  sas?: boolean;
+  /** Ask the server to allocate a short room code instead of joining a known routing id. */
+  create?: boolean;
 }
 
 export class PairingSession {
+  /** Our per-pairing ephemeral keypair, generated once the room is ready (SAS only). */
+  private ephemeral: EphemeralKeyPair | undefined;
+
   constructor(
     private readonly routingId: string,
     private readonly rtc: RtcConnection,
     private readonly link: SignalLink,
     private readonly handlers: SessionHandlers = {},
+    private readonly options: SessionOptions = {},
   ) {}
 
   start(): void {
@@ -61,14 +88,23 @@ export class PairingSession {
     });
     this.rtc.onMessage((text) => this.handlers.onHello?.(text));
     this.link.onMessage((message) => void this.handle(message));
-    this.link.send({ type: 'join', routingId: this.routingId });
+    // The creator has the server mint a short code; everyone else joins a known routing id.
+    if (this.options.create) this.link.send({ type: 'create-room' });
+    else this.link.send({ type: 'join', routingId: this.routingId });
   }
 
   private async handle(message: ServerMessage): Promise<void> {
-    if (message.type === 'ready' && message.initiator) {
-      const offer = await this.rtc.createOffer();
-      await this.rtc.setLocalDescription(offer);
-      this.link.send({ type: 'signal', data: { kind: 'description', description: offer } });
+    if (message.type === 'room-created') {
+      this.handlers.onRoomCreated?.(message.code);
+    } else if (message.type === 'ready') {
+      // SAS: both peers publish an ephemeral public key the instant the room locks, in
+      // parallel with the WebRTC offer/answer below.
+      if (this.options.sas) this.sendPublicKey();
+      if (message.initiator) {
+        const offer = await this.rtc.createOffer();
+        await this.rtc.setLocalDescription(offer);
+        this.link.send({ type: 'signal', data: { kind: 'description', description: offer } });
+      }
     } else if (message.type === 'signal') {
       const payload = message.data as SignalPayload;
       if (payload.kind === 'description') {
@@ -79,6 +115,8 @@ export class PairingSession {
           await this.rtc.setLocalDescription(answer);
           this.link.send({ type: 'signal', data: { kind: 'description', description: answer } });
         }
+      } else if (payload.kind === 'pubkey') {
+        this.deriveSafetyString(payload.publicKey);
       } else {
         await this.rtc.addIceCandidate(payload.candidate);
       }
@@ -89,5 +127,23 @@ export class PairingSession {
     ) {
       this.handlers.onClosed?.(message.type);
     }
+  }
+
+  private sendPublicKey(): void {
+    this.ephemeral = generateEphemeralKeyPair();
+    this.link.send({
+      type: 'signal',
+      data: { kind: 'pubkey', publicKey: encodePublicKey(this.ephemeral.publicKey) },
+    });
+  }
+
+  private deriveSafetyString(peerPublicKey: string): void {
+    // Ignore a stray pubkey arriving before our own keypair exists (we never started SAS).
+    if (!this.ephemeral) return;
+    const { sessionKey, safetyString } = deriveSession(
+      this.ephemeral,
+      decodePublicKey(peerPublicKey),
+    );
+    this.handlers.onSafetyString?.(safetyString, sessionKey);
   }
 }

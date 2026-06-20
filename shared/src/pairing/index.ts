@@ -11,6 +11,8 @@ export {
   ready as sasReady,
   generateEphemeralKeyPair,
   deriveSession,
+  encodePublicKey,
+  decodePublicKey,
   SAFETY_ALPHABET,
   SAFETY_STRING_LENGTH,
 } from './sas';

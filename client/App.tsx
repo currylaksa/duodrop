@@ -7,11 +7,11 @@ import {
   buildShareLink,
   parseShareLink,
 } from '../shared/src/pairing';
-import { DuoDropController, type TransferItem } from './controller';
+import { DuoDropController, type TransferItem, type ControllerConfig } from './controller';
 import { QrCode } from './QrCode';
 import { QrScanner } from './QrScanner';
 
-type View = 'home' | 'create' | 'join' | 'xfer';
+type View = 'home' | 'create' | 'join' | 'xfer' | 'sas-start' | 'sas-wait' | 'sas-compare';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -91,6 +91,12 @@ export function App() {
   const [scanning, setScanning] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
+  // SAS short-code path (ADR 0003) — laptop ↔ laptop, no camera.
+  const [sasMode, setSasMode] = useState(false);
+  const [sasConnected, setSasConnected] = useState(false);
+  const [roomCode, setRoomCode] = useState('');
+  const [roomInput, setRoomInput] = useState('');
+  const [safety, setSafety] = useState<string[]>([]);
 
   const controllerRef = useRef<DuoDropController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -104,14 +110,22 @@ export function App() {
     toastTimer.current = setTimeout(() => setToastOn(false), 2200);
   }, []);
 
-  const beginSession = useCallback(async (s: Uint8Array) => {
+  const startController = useCallback(async (config: ControllerConfig) => {
     // One session per page load — also guards against StrictMode's double-mount.
     if (startedRef.current) return;
     startedRef.current = true;
-    setSecret(s);
-    setRoutingId(await deriveRoutingId(s));
-    const controller = new DuoDropController(s, {
-      onConnected: () => setConnecting(true),
+    const sas = config.mode === 'sas';
+    setSasMode(sas);
+    if (config.mode === 'secret') {
+      setSecret(config.secret);
+      setRoutingId(await deriveRoutingId(config.secret));
+    }
+    const controller = new DuoDropController(config, {
+      // SAS pairing inserts a human safety-string match before the transfer view; the secret
+      // path goes straight through its connect overlay to the transfer view.
+      onConnected: () => (sas ? setSasConnected(true) : setConnecting(true)),
+      onRoomCreated: (code) => setRoomCode(code),
+      onSafetyString: (emoji) => setSafety(emoji),
       onItemAdd: (item) => setItems((prev) => [item, ...prev]),
       onItemProgress: (id, transferred, speed) =>
         setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred, speed } : i))),
@@ -142,6 +156,17 @@ export function App() {
       toast(err instanceof Error ? `Couldn’t connect — ${err.message}` : 'Couldn’t connect');
     }
   }, [toast]);
+
+  // The QR/long-link path is always secret-based; keep its one-arg call sites unchanged.
+  const beginSession = useCallback(
+    (s: Uint8Array) => startController({ mode: 'secret', secret: s }),
+    [startController],
+  );
+
+  // Once a SAS room is both connected and has its safety string, show the match gate.
+  useEffect(() => {
+    if (sasMode && sasConnected && safety.length && view === 'sas-wait') setView('sas-compare');
+  }, [sasMode, sasConnected, safety, view]);
 
   // Joining peer: the secret rides in the share link's #fragment. Handle both a fresh page load
   // and a link pasted into the address bar of an already-open tab — a fragment-only change fires
@@ -177,6 +202,29 @@ export function App() {
     void beginSession(generatePairingSecret());
     setView('create');
   }, [beginSession]);
+
+  const createSasRoom = useCallback(() => {
+    void startController({ mode: 'sas', create: true });
+    setView('sas-wait');
+  }, [startController]);
+
+  const joinSasRoom = useCallback(() => {
+    const code = roomInput.trim();
+    if (!/^\d{4}$/.test(code)) {
+      toast('Enter the 4-digit room code from the other laptop');
+      return;
+    }
+    void startController({ mode: 'sas', create: false, code });
+    setView('sas-wait');
+  }, [roomInput, startController, toast]);
+
+  // The security gate (ADR 0003): the transfer view — the only place files can be sent — is
+  // unreachable until a human confirms the safety strings match on both screens.
+  const confirmMatch = useCallback(() => setView('xfer'), []);
+  const rejectMatch = useCallback(() => {
+    // A mismatch means a possible relay-in-the-middle: tear the whole session down.
+    location.href = location.origin;
+  }, []);
 
   const joinWithCode = useCallback(() => {
     const text = codeInput.trim();
@@ -260,6 +308,9 @@ export function App() {
                     Join with a code <span className="k">J</span>
                   </button>
                 </div>
+                <button className="linklike" onClick={() => setView('sas-start')}>
+                  Two laptops, no camera? Pair with a room code →
+                </button>
               </div>
               <div className="diagram">
                 <span className="corner tl" />
@@ -387,6 +438,117 @@ export function App() {
                 <button className="btn btn-ghost" onClick={() => setView('home')}>
                   ← back
                 </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'sas-start' && (
+          <section className="view">
+            <div className="join reveal">
+              <div className="eyebrow" style={{ justifyContent: 'center' }}>
+                laptop ↔ laptop · short code + emoji check
+              </div>
+              <h2>Pair two laptops</h2>
+              <p>
+                One laptop creates a room and reads out a 4-digit code; the other types it in. Then
+                both screens show four emoji — you only continue if they match.
+              </p>
+              <div className="actions" style={{ justifyContent: 'center', marginTop: 8 }}>
+                <button className="btn btn-signal" onClick={createSasRoom}>
+                  Create a room
+                </button>
+              </div>
+              <div className="or">or join a room someone created</div>
+              <div className="codeinput">
+                <input
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  onKeyDown={(e) => e.key === 'Enter' && joinSasRoom()}
+                  placeholder="4-digit code · 0000"
+                  inputMode="numeric"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="actions" style={{ justifyContent: 'center' }}>
+                <button className="btn btn-signal" onClick={joinSasRoom}>
+                  Join room
+                </button>
+              </div>
+              <div style={{ marginTop: 36 }}>
+                <button className="btn btn-ghost" onClick={() => setView('home')}>
+                  ← back
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'sas-wait' && (
+          <section className="view">
+            <div className="join reveal">
+              {roomCode ? (
+                <>
+                  <div className="eyebrow" style={{ justifyContent: 'center' }}>
+                    room open · waiting for the other laptop
+                  </div>
+                  <h2>Room code</h2>
+                  <p>Type this on the other laptop to pair.</p>
+                  <div className="roomcode">{roomCode}</div>
+                  <div className="waiting" style={{ justifyContent: 'center', marginTop: 22 }}>
+                    <span className="dot live" /> waiting for the other device…
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="eyebrow" style={{ justifyContent: 'center' }}>
+                    joining room {roomInput}
+                  </div>
+                  <h2>Connecting…</h2>
+                  <p>Pairing with the other laptop over the relay.</p>
+                  <div className="waiting" style={{ justifyContent: 'center', marginTop: 22 }}>
+                    <span className="dot live" /> establishing the channel…
+                  </div>
+                </>
+              )}
+              <div style={{ marginTop: 36 }}>
+                <button className="btn btn-ghost" onClick={endSession}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {view === 'sas-compare' && (
+          <section className="view">
+            <div className="join reveal">
+              <div className="eyebrow" style={{ justifyContent: 'center' }}>
+                security check · compare both screens
+              </div>
+              <h2>Do these match?</h2>
+              <p>
+                These four emoji must be <b>identical</b> on both laptops. If they differ, someone
+                may be intercepting the connection — do not continue.
+              </p>
+              <div className="sasemoji">
+                {safety.map((e, i) => (
+                  <span key={i} className="sasglyph">
+                    {e}
+                  </span>
+                ))}
+              </div>
+              <div className="actions" style={{ justifyContent: 'center', marginTop: 26 }}>
+                <button className="btn btn-signal" onClick={confirmMatch}>
+                  ✓ They match — continue
+                </button>
+                <button className="btn btn-danger" onClick={rejectMatch}>
+                  ✕ They’re different
+                </button>
+              </div>
+              <div className="secret-note" style={{ justifyContent: 'center', marginTop: 20 }}>
+                <span className="lock">🔒</span>
+                <span>the emoji are derived from a key the relay never sees</span>
               </div>
             </div>
           </section>

@@ -25,6 +25,16 @@ export function generateEphemeralKeyPair(): EphemeralKeyPair {
   return sodium.crypto_kx_keypair();
 }
 
+/** Encode a public key for the wire (the relay carries the SAS pubkey as a JSON string). */
+export function encodePublicKey(key: Uint8Array): string {
+  return sodium.to_base64(key, sodium.base64_variants.ORIGINAL);
+}
+
+/** Decode a peer's public key received over the relay. */
+export function decodePublicKey(encoded: string): Uint8Array {
+  return sodium.from_base64(encoded, sodium.base64_variants.ORIGINAL);
+}
+
 export interface PairedSession {
   /** 32-byte symmetric key for the Transfer's secretstream. Never sent to the server. */
   readonly sessionKey: Uint8Array;

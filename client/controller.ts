@@ -39,7 +39,20 @@ export interface ControllerHandlers {
   onItemError(id: string, message: string): void;
   onWarn?(message: string): void;
   onClosed?(message: string): void;
+  /** SAS path: the server allocated a short room code for the creator to read out. */
+  onRoomCreated?(code: string): void;
+  /** SAS path: the emoji safety string the humans compare before any bytes flow. */
+  onSafetyString?(safetyString: string[]): void;
 }
+
+/**
+ * How this peer pairs. The QR/long-link path carries a Pairing secret (key derived locally);
+ * the SAS short-code path (ADR 0003) derives the key from an in-band pubkey exchange instead.
+ */
+export type ControllerConfig =
+  | { mode: 'secret'; secret: Uint8Array }
+  | { mode: 'sas'; create: true }
+  | { mode: 'sas'; create: false; code: string };
 
 let counter = 0;
 const uid = (): string => `t${++counter}`;
@@ -53,27 +66,62 @@ const CLOSED_MESSAGE: Record<'expired' | 'peer-left' | 'rejected', string> = {
 export class DuoDropController {
   private transfer: TransferChannel | undefined;
   private key: Uint8Array | undefined;
+  private channelOpen = false;
+  private wired = false;
 
   constructor(
-    private readonly secret: Uint8Array,
+    private readonly config: ControllerConfig,
     private readonly handlers: ControllerHandlers,
   ) {}
 
   async start(): Promise<void> {
     await ready();
-    this.key = await derivePairingKey(this.secret);
-    const routingId = await deriveRoutingId(this.secret);
+    // For the SAS path the key is derived later (from the in-band pubkey exchange); for the
+    // secret path it's known up front and the routing id comes from the same secret.
+    let routingId = '';
+    if (this.config.mode === 'secret') {
+      this.key = await derivePairingKey(this.config.secret);
+      routingId = await deriveRoutingId(this.config.secret);
+    } else if (!this.config.create) {
+      routingId = this.config.code; // the typed short code is the routing id
+    }
+    const sas = this.config.mode === 'sas';
     const iceServers = await fetchIceServers();
     const connection = createRtcConnection(iceServers);
     this.transfer = connection.transfer;
-    const session = new PairingSession(routingId, connection, createSignalLink(signalWsUrl()), {
-      onConnected: () => this.onConnected(),
-      onClosed: (reason) => this.handlers.onClosed?.(CLOSED_MESSAGE[reason]),
-    });
+    const session = new PairingSession(
+      routingId,
+      connection,
+      createSignalLink(signalWsUrl()),
+      {
+        onConnected: () => this.onChannelOpen(),
+        onClosed: (reason) => this.handlers.onClosed?.(CLOSED_MESSAGE[reason]),
+        onRoomCreated: (code) => this.handlers.onRoomCreated?.(code),
+        onSafetyString: (safetyString, sessionKey) => {
+          this.key = sessionKey;
+          this.handlers.onSafetyString?.(safetyString);
+          this.wireReceiver();
+        },
+      },
+      { sas, create: sas && this.config.create },
+    );
     session.start();
   }
 
-  private onConnected(): void {
+  /**
+   * The data channel opened. Wire the receiver (it needs the key, which on the SAS path may
+   * not exist yet) and tell the UI we're connected.
+   */
+  private onChannelOpen(): void {
+    this.channelOpen = true;
+    this.wireReceiver();
+    this.handlers.onConnected();
+  }
+
+  /** Build the receiving pipeline exactly once, when both the channel and the key are ready. */
+  private wireReceiver(): void {
+    if (this.wired || !this.channelOpen || !this.key) return;
+    this.wired = true;
     const transfer = this.transfer!;
     let receiveId = '';
     let speed = new SpeedSampler();
@@ -129,7 +177,6 @@ export class DuoDropController {
         if (receiveId) this.handlers.onItemError(receiveId, 'Transfer failed — stream could not be decrypted');
       }
     });
-    this.handlers.onConnected();
   }
 
   async sendFiles(files: File[]): Promise<void> {
