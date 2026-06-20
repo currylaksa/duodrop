@@ -20,6 +20,15 @@ describe('signaling wire protocol (issue 001): client → server messages', () =
     expect(b.sent).toContainEqual({ type: 'signal', data: { sdp: 'offer' } });
   });
 
+  it('routes a create-room into a fresh server-allocated room (SAS path, ADR 0003)', () => {
+    const rooms = new RoomRegistry({ generateCode: () => '8412' });
+    const creator = fakePeer();
+
+    handleClientMessage(rooms, creator, JSON.stringify({ type: 'create-room' }));
+
+    expect(creator.sent).toContainEqual({ type: 'room-created', code: '8412' });
+  });
+
   it('ignores malformed, unknown, or incomplete messages without forming a room', () => {
     const rooms = new RoomRegistry();
     const a = fakePeer();

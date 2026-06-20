@@ -1,7 +1,7 @@
 /**
- * Renders a scannable QR of the share link (issue 005). Dark modules on a white field so it
- * scans regardless of the app's dark theme. The QR carries the link — which holds the Pairing
- * secret in its #fragment — so a scan recovers the same secret as opening the link (ADR 0001).
+ * Renders a scannable QR (issue 005). Dark modules on a white field so it scans regardless of
+ * the app's dark theme. The QR carries a room-join link whose #fragment holds the non-secret
+ * 4-digit room code, so a scan joins the same room as typing the code (SAS path, ADR 0003/0005).
  */
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';

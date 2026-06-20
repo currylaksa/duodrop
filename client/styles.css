@@ -274,3 +274,15 @@ body::after{
   *{animation-duration:.001ms!important;animation-iteration-count:1!important}
   .reveal>*{opacity:1;transform:none}
 }
+
+/* SAS short-code path (ADR 0003) */
+.linklike{margin-top:18px;background:none;border:none;color:var(--fg-dim);font-family:var(--body);
+  font-size:13px;cursor:pointer;padding:0;transition:.18s}
+.linklike:hover{color:var(--signal)}
+.hint-row{margin-top:18px;color:var(--fg-faint);font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+.btn-danger{background:transparent;border-color:var(--danger);color:var(--danger)}
+.btn-danger:hover{background:var(--danger);color:#0A0B0D;border-color:var(--danger)}
+.roomcode{font-family:var(--mono);font-weight:700;font-size:clamp(44px,9vw,72px);letter-spacing:.18em;
+  color:var(--signal);text-align:center;margin:14px 0 4px;text-shadow:0 0 40px var(--signal-glow)}
+.sasemoji{display:flex;gap:clamp(10px,3vw,22px);justify-content:center;margin:26px 0 6px}
+.sasglyph{font-size:clamp(46px,11vw,76px);line-height:1;filter:drop-shadow(0 8px 24px rgba(0,0,0,.5))}

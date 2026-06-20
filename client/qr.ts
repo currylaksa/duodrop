@@ -1,26 +1,25 @@
 /**
- * The QR Join method (phase 5, issue 005). The creator's QR encodes the *share link*, so a
- * scan recovers the same Pairing secret as opening the link — never revealing it to the server
- * (ADR 0001). This module is the pure seam: turning decoded QR text back into a secret. The
- * camera capture itself lives in QrScanner.tsx.
+ * The room-code Join transport (SAS path, ADR 0003 / 0005). The creator's QR encodes a link
+ * whose #fragment carries the **non-secret** 4-digit room code, so scanning it — or opening it
+ * — joins the same room as typing the code. Nothing secret is in the QR; security comes from
+ * the emoji safety-string compare. Pure seam: text <-> room code. Camera capture lives in
+ * QrScanner.tsx.
  */
-import { parseShareLink, decodeSecret } from '../shared/src/pairing';
 
-const SECRET_BYTES = 16;
+const ROOM_CODE = /^\d{4}$/;
+
+/** The scannable/openable link for a room code: `<origin>/#room=4821`. */
+export function buildRoomLink(code: string, origin: string): string {
+  return `${origin}/#room=${code}`;
+}
 
 /**
- * Recover a Pairing secret from scanned QR text. The QR carries a share link, but we also
- * tolerate a bare typed code so the scanner never rejects a valid secret on a technicality.
- * Returns null if the text isn't a DuoDrop secret.
+ * Recover a 4-digit room code from scanned QR text or an opened URL. Accepts a full link
+ * (`…#room=4821`) or a bare code. Returns null if no room code is present.
  */
-export function secretFromScan(text: string): Uint8Array | null {
-  const fromLink = parseShareLink(text);
-  if (fromLink && fromLink.length === SECRET_BYTES) return fromLink;
-  try {
-    const fromCode = decodeSecret(text);
-    if (fromCode.length === SECRET_BYTES) return fromCode;
-  } catch {
-    // not a base32 code either
-  }
-  return null;
+export function roomFromScan(text: string): string | null {
+  const fromLink = text.match(/[#&]room=(\d{4})(?:\b|$)/);
+  if (fromLink) return fromLink[1]!;
+  const trimmed = text.trim();
+  return ROOM_CODE.test(trimmed) ? trimmed : null;
 }
