@@ -3,7 +3,6 @@ import {
   generatePairingSecret,
   deriveRoutingId,
   encodeSecret,
-  decodeSecret,
   buildShareLink,
   parseShareLink,
 } from '../shared/src/pairing';
@@ -11,7 +10,7 @@ import { DuoDropController, type TransferItem, type ControllerConfig } from './c
 import { QrCode } from './QrCode';
 import { QrScanner } from './QrScanner';
 
-type View = 'home' | 'create' | 'join' | 'xfer' | 'sas-start' | 'sas-wait' | 'sas-compare';
+type View = 'home' | 'create' | 'join' | 'xfer' | 'sas-wait' | 'sas-compare';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -87,7 +86,6 @@ export function App() {
   const [items, setItems] = useState<TransferItem[]>([]);
   const [connecting, setConnecting] = useState(false);
   const [drag, setDrag] = useState(false);
-  const [codeInput, setCodeInput] = useState('');
   const [scanning, setScanning] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
@@ -226,24 +224,6 @@ export function App() {
     location.href = location.origin;
   }, []);
 
-  const joinWithCode = useCallback(() => {
-    const text = codeInput.trim();
-    // Accept either a typed pairing code or a pasted share link — people paste the whole URL.
-    let s = text.includes('#') || text.includes('://') ? parseShareLink(text) : null;
-    if (!s) {
-      try {
-        s = decodeSecret(text);
-      } catch {
-        s = null;
-      }
-    }
-    if (!s || s.length !== 16) {
-      toast('Invalid pairing code');
-      return;
-    }
-    void beginSession(s);
-  }, [beginSession, codeInput, toast]);
-
   const copyLink = useCallback(() => {
     if (!secret) return;
     const link = buildShareLink(secret, location.origin);
@@ -301,15 +281,15 @@ export function App() {
                   the relay never sees your key, and <b>never touches your file</b>.
                 </p>
                 <div className="actions">
-                  <button className="btn btn-signal" onClick={createChannel}>
-                    Create a channel <span className="k">C</span>
+                  <button className="btn btn-signal" onClick={createSasRoom}>
+                    Pair with a room code <span className="k">C</span>
                   </button>
-                  <button className="btn btn-ghost" onClick={() => setView('join')}>
-                    Join with a code <span className="k">J</span>
+                  <button className="btn btn-ghost" onClick={createChannel}>
+                    Create a QR channel <span className="k">Q</span>
                   </button>
                 </div>
-                <button className="linklike" onClick={() => setView('sas-start')}>
-                  Two laptops, no camera? Pair with a room code →
+                <button className="linklike" onClick={() => setView('join')}>
+                  Joining a device? Enter the room code or scan the QR →
                 </button>
               </div>
               <div className="diagram">
@@ -389,7 +369,7 @@ export function App() {
                   </div>
                   <div className="qrwrap">
                     {secret && <QrCode text={buildShareLink(secret, location.origin)} />}
-                    <div className="qr-cap">scan · type the code · or open the link</div>
+                    <div className="qr-cap">scan with the other device · or open the link</div>
                   </div>
                 </div>
               </div>
@@ -401,65 +381,10 @@ export function App() {
           <section className="view">
             <div className="join reveal">
               <div className="eyebrow" style={{ justifyContent: 'center' }}>
-                enter the pairing secret
+                join a device · no sign-in, no app
               </div>
-              <h2>Join a channel</h2>
-              <p>Type the code from the other device — or paste the whole share link here.</p>
-              <div className="codeinput">
-                <input
-                  value={codeInput}
-                  onChange={(e) => setCodeInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && joinWithCode()}
-                  placeholder="K7QM-9FRT-2XPW-…"
-                  inputMode="text"
-                  autoComplete="off"
-                  autoCapitalize="characters"
-                />
-              </div>
-              <div className="actions" style={{ justifyContent: 'center' }}>
-                <button className="btn btn-signal" onClick={joinWithCode}>
-                  Connect
-                </button>
-                <button className="btn btn-ghost" onClick={() => setScanning((on) => !on)}>
-                  {scanning ? 'Hide scanner' : 'Scan QR'}
-                </button>
-              </div>
-              {scanning && (
-                <QrScanner
-                  onSecret={(s) => {
-                    setScanning(false);
-                    void beginSession(s);
-                  }}
-                  onCancel={() => setScanning(false)}
-                />
-              )}
-              <div className="or">or open the share link directly</div>
-              <div style={{ marginTop: 36 }}>
-                <button className="btn btn-ghost" onClick={() => setView('home')}>
-                  ← back
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {view === 'sas-start' && (
-          <section className="view">
-            <div className="join reveal">
-              <div className="eyebrow" style={{ justifyContent: 'center' }}>
-                laptop ↔ laptop · short code + emoji check
-              </div>
-              <h2>Pair two laptops</h2>
-              <p>
-                One laptop creates a room and reads out a 4-digit code; the other types it in. Then
-                both screens show four emoji — you only continue if they match.
-              </p>
-              <div className="actions" style={{ justifyContent: 'center', marginTop: 8 }}>
-                <button className="btn btn-signal" onClick={createSasRoom}>
-                  Create a room
-                </button>
-              </div>
-              <div className="or">or join a room someone created</div>
+              <h2>Join a device</h2>
+              <p>Type the 4-digit room code from the other device — or scan its QR.</p>
               <div className="codeinput">
                 <input
                   value={roomInput}
@@ -474,7 +399,19 @@ export function App() {
                 <button className="btn btn-signal" onClick={joinSasRoom}>
                   Join room
                 </button>
+                <button className="btn btn-ghost" onClick={() => setScanning((on) => !on)}>
+                  {scanning ? 'Hide scanner' : 'Scan QR'}
+                </button>
               </div>
+              {scanning && (
+                <QrScanner
+                  onSecret={(s) => {
+                    setScanning(false);
+                    void beginSession(s);
+                  }}
+                  onCancel={() => setScanning(false)}
+                />
+              )}
               <div style={{ marginTop: 36 }}>
                 <button className="btn btn-ghost" onClick={() => setView('home')}>
                   ← back

@@ -1,9 +1,18 @@
 # DuoDrop
 
-A browser-based, zero-install P2P file transfer app. Two devices pair, then send
-files directly device-to-device over WebRTC with application-layer end-to-end
-encryption. The signaling server only brokers the handshake and must learn nothing
-about file contents or the encryption key.
+A browser-based, zero-install P2P file transfer app for one specific problem: **getting a
+file onto an untrusted, co-located device — a print-shop PC, a lab machine — without
+signing into Telegram / WhatsApp / Drive on it.** Logging a messaging account into a public
+machine is the thing to avoid; so is hand-typing a long secret on it, which is just as
+hostile. Two devices pair, then send files directly device-to-device over WebRTC with
+application-layer end-to-end encryption. The signaling server only brokers the handshake and
+must learn nothing about file contents or the encryption key.
+
+The pairing UX is built around that hostile setting. The **primary** way in is a short,
+**non-secret** room code authenticated by a human emoji compare (SAS, [ADR 0003](docs/adr/0003-short-code-sas-pairing.md)) —
+nothing long to type, no account. The high-entropy-secret path survives only as a **QR /
+share-link** transport (camera or remote case); the secret is **never hand-typed to join**
+([ADR 0004](docs/adr/0004-drop-typed-secret-join.md)).
 
 ## Language
 
@@ -19,11 +28,13 @@ only to relay the handshake between exactly two peers, then is torn down.
 
 **Pairing secret**:
 The shared, **high-entropy** (128-bit) secret both peers know and from which the
-encryption key is derived. It rides inside a link or QR (base64url), and can be typed as a
-fallback (rendered as ~22 grouped base32 chars, ambiguous chars excluded). It is **never
-sent to the signaling server**. This is the real pairing primitive. It is deliberately
-*not* a short memorable code — a short code could be brute-forced by a malicious server
-from the Routing ID.
+encryption key is derived. It rides inside a QR or share link (base64url) and is **never
+sent to the signaling server**. It is the pairing primitive for the **QR / link path**. It
+is deliberately *not* a short memorable code — a short code could be brute-forced by a
+malicious server from the Routing ID — so it is **never hand-typed to join** (typing 128
+bits is hostile, doubly so on a public device). The typed case is served instead by the
+**Room code** below, which is non-secret. (Historically the secret had a ~22-char base32
+typed fallback; [ADR 0004](docs/adr/0004-drop-typed-secret-join.md) removed it.)
 _Avoid_: room code, pairing code, short code, passphrase.
 
 **Routing ID**:
@@ -33,17 +44,31 @@ is high-entropy, the server cannot brute-force the secret back out of the Routin
 server sees only this, never the pairing secret.
 _Avoid_: room code, room ID.
 
-**Pairing key** (a.k.a. session key):
+**Pairing key**:
 The symmetric key derived from the **pairing secret**, used to encrypt and decrypt file
-chunks. One per pairing.
+chunks on the QR / link path. One per pairing. (The Room-code path derives its *own*
+symmetric key — the SAS **session key** — from an ephemeral key exchange, not from any
+pairing secret; ADR 0003. Both feed the same encryption stream, so don't use "session key"
+loosely for the Pairing key.)
 
 **Join method**:
-One of three interchangeable ways the second peer obtains the **pairing secret** — typing
-it, scanning a QR, or opening a share link. All three carry the *same* secret; QR and link
-are just transports for it. Typing is the universal fallback (works PC↔PC); scanning needs
-a camera; the link is the smoothest PC↔PC path. None of the three reveals the secret to
-the server.
-_Avoid_: treating QR as the primary or only way in (breaks PC↔PC).
+How the second peer pairs. Two families now exist:
+1. **Room code** (primary; SAS, ADR 0003) — the joiner types a short, non-secret 4-digit
+   code and both humans compare a 4-emoji safety string. No secret to type, no account; the
+   friendly path for a public or camera-less device.
+2. **Pairing-secret transport** — the joiner obtains the high-entropy **pairing secret** out
+   of band, by **scanning the QR** or **opening the share link**. Both carry the *same*
+   secret and reveal nothing to the server; the QR suits a phone, the link suits remote.
+**Hand-typing the pairing secret has been removed** (ADR 0004) — the Room code covers the
+typed case instead.
+_Avoid_: treating QR as the primary way in; calling the typed long secret a join method.
+
+**Room code**:
+The short, **non-secret**, server-allocated 4-digit number for the SAS path (ADR 0003). It
+is a human-friendly **Routing ID** the two peers rendezvous on — security comes from the
+emoji compare, not from the code, so the server may mint and see it. Distinct from the
+**pairing secret**, which it never carries.
+_Avoid_: conflating it with the pairing secret; treating its secrecy as protective.
 
 ### Transfer
 
@@ -61,15 +86,19 @@ _Avoid_: batch, bundle.
 
 ### Flagged ambiguities
 
-- The brief's "the code" conflates **pairing secret** (the thing that secures) with
-  **routing ID** (the thing that routes). They are deliberately separated so the server
-  routes on the Routing ID while never seeing the Pairing secret. When the design says
-  "the code," decide which of the two is meant.
+- The word "code" is now overloaded three ways: the **pairing secret** (secures; never
+  typed, never sent to the server), the **Routing ID** (routes; server-visible hash), and
+  the **Room code** (the SAS path's non-secret 4-digit routing rendezvous). The Room code is
+  a kind of Routing ID; neither it nor the Routing ID is ever the secret. When a design note
+  says "the code," decide which of the three is meant.
 
 ## Example dialogue
 
 > **Dev:** "Where does the server look up the room?"
 > **Expert:** "By the Routing ID — the hash. It never sees the Pairing secret."
 > **Dev:** "So how does the other peer get the Pairing secret?"
-> **Expert:** "Out of band: it's in the link fragment or the QR, or the user types it.
-> The server relays handshake messages for that Routing ID but can't derive the Pairing key."
+> **Expert:** "Out of band: it's in the link fragment or the QR — never typed by hand. The
+> server relays handshake messages for that Routing ID but can't derive the Pairing key."
+> **Dev:** "And the short room code?"
+> **Expert:** "Different path entirely — that's the SAS Room code. It carries no secret; the
+> two humans compare four emoji to authenticate. The server allocates and sees the code."
