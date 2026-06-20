@@ -7,3 +7,11 @@ export { generatePairingSecret } from './secret';
 export { deriveRoutingId, derivePairingKey } from './derive';
 export { encodeSecret, decodeSecret } from './base32';
 export { buildShareLink, parseShareLink } from './link';
+export {
+  ready as sasReady,
+  generateEphemeralKeyPair,
+  deriveSession,
+  SAFETY_ALPHABET,
+  SAFETY_STRING_LENGTH,
+} from './sas';
+export type { EphemeralKeyPair, PairedSession } from './sas';
