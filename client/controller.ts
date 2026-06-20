@@ -38,10 +38,17 @@ export interface ControllerHandlers {
   onItemDone(id: string): void;
   onItemError(id: string, message: string): void;
   onWarn?(message: string): void;
+  onClosed?(message: string): void;
 }
 
 let counter = 0;
 const uid = (): string => `t${++counter}`;
+
+const CLOSED_MESSAGE: Record<'expired' | 'peer-left' | 'rejected', string> = {
+  expired: 'Channel expired — the other device didn’t join in time. Create a new channel.',
+  'peer-left': 'The other device disconnected.',
+  rejected: 'That channel already has two devices.',
+};
 
 export class DuoDropController {
   private transfer: TransferChannel | undefined;
@@ -61,6 +68,7 @@ export class DuoDropController {
     this.transfer = connection.transfer;
     const session = new PairingSession(routingId, connection, createSignalLink(signalWsUrl()), {
       onConnected: () => this.onConnected(),
+      onClosed: (reason) => this.handlers.onClosed?.(CLOSED_MESSAGE[reason]),
     });
     session.start();
   }

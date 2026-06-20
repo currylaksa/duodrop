@@ -17,6 +17,19 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
+      // The HTML document carries the CSP header and links the hashed bundles, so a stale copy
+      // pins old security policy and old asset URLs (008 fix shipped but couldn't reach cached
+      // clients). Navigations go network-first — fresh when online, cache only as offline
+      // fallback. Hashed static assets stay stale-while-revalidate; their URLs change on deploy.
+      if (request.mode === 'navigate') {
+        try {
+          const response = await fetch(request);
+          if (response.ok) cache.put(request, response.clone());
+          return response;
+        } catch {
+          return (await cache.match(request)) ?? Response.error();
+        }
+      }
       const cached = await cache.match(request);
       const network = fetch(request)
         .then((response) => {

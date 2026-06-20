@@ -39,6 +39,8 @@ export interface RtcConnection {
 export interface SessionHandlers {
   onConnected?: () => void;
   onHello?: (text: string) => void;
+  /** The room ended before (or after) pairing: swept while waiting, peer gone, or full. */
+  onClosed?: (reason: 'expired' | 'peer-left' | 'rejected') => void;
 }
 
 export class PairingSession {
@@ -80,6 +82,12 @@ export class PairingSession {
       } else {
         await this.rtc.addIceCandidate(payload.candidate);
       }
+    } else if (
+      message.type === 'expired' ||
+      message.type === 'peer-left' ||
+      message.type === 'rejected'
+    ) {
+      this.handlers.onClosed?.(message.type);
     }
   }
 }

@@ -130,6 +130,7 @@ export function App() {
         toast(message);
       },
       onWarn: (message) => toast(message),
+      onClosed: (message) => toast(message),
     });
     controllerRef.current = controller;
     await controller.start();
