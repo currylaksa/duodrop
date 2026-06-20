@@ -1,18 +1,18 @@
 /**
- * Camera-based QR scanning (issue 005) — the optional Join method, never the only way in. It
+ * Camera-based QR scanning (issue 005) — an optional Join method, never the only way in. It
  * opens the rear camera, decodes frames with jsQR, and on the first frame that yields a valid
- * DuoDrop secret calls onSecret. If the camera is unavailable (denied/no device/insecure
+ * DuoDrop room code calls onCode. If the camera is unavailable (denied/no device/insecure
  * context) it surfaces an error and the user falls back to typing the code.
  */
 import { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
-import { secretFromScan } from './qr';
+import { roomFromScan } from './qr';
 
 export function QrScanner({
-  onSecret,
+  onCode,
   onCancel,
 }: {
-  onSecret: (secret: Uint8Array) => void;
+  onCode: (code: string) => void;
   onCancel: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -34,10 +34,10 @@ export function QrScanner({
         const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const found = jsQR(frame.data, frame.width, frame.height);
         if (found) {
-          const secret = secretFromScan(found.data);
-          if (secret) {
+          const code = roomFromScan(found.data);
+          if (code) {
             stopped = true;
-            onSecret(secret);
+            onCode(code);
             return;
           }
         }
@@ -67,7 +67,7 @@ export function QrScanner({
       cancelAnimationFrame(raf);
       stream?.getTracks().forEach((t) => t.stop());
     };
-  }, [onSecret]);
+  }, [onCode]);
 
   return (
     <div className="scanner">

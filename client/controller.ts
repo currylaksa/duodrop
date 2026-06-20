@@ -5,7 +5,6 @@
  * (decrypt + reassemble + download). Every byte on the wire is XChaCha20-Poly1305 ciphertext.
  */
 
-import { deriveRoutingId, derivePairingKey } from '../shared/src/pairing';
 import { PairingSession } from '../shared/src/signaling/session';
 import { ready, createEncryptor } from '../shared/src/crypto/secretstream';
 import { sendEncryptedFile, EncryptedReceiver } from '../shared/src/transfer/encrypted-transfer';
@@ -46,13 +45,11 @@ export interface ControllerHandlers {
 }
 
 /**
- * How this peer pairs. The QR/long-link path carries a Pairing secret (key derived locally);
- * the SAS short-code path (ADR 0003) derives the key from an in-band pubkey exchange instead.
+ * How this peer pairs (SAS short-code path, ADR 0003/0005). Either it creates a room (the
+ * server allocates the code) or it joins one by code. The transfer key is derived from the
+ * in-band ephemeral pubkey exchange — there is no pre-shared secret.
  */
-export type ControllerConfig =
-  | { mode: 'secret'; secret: Uint8Array }
-  | { mode: 'sas'; create: true }
-  | { mode: 'sas'; create: false; code: string };
+export type ControllerConfig = { create: true } | { create: false; code: string };
 
 let counter = 0;
 const uid = (): string => `t${++counter}`;
@@ -76,16 +73,9 @@ export class DuoDropController {
 
   async start(): Promise<void> {
     await ready();
-    // For the SAS path the key is derived later (from the in-band pubkey exchange); for the
-    // secret path it's known up front and the routing id comes from the same secret.
-    let routingId = '';
-    if (this.config.mode === 'secret') {
-      this.key = await derivePairingKey(this.config.secret);
-      routingId = await deriveRoutingId(this.config.secret);
-    } else if (!this.config.create) {
-      routingId = this.config.code; // the typed short code is the routing id
-    }
-    const sas = this.config.mode === 'sas';
+    // The transfer key is derived later, from the in-band pubkey exchange (onSafetyString).
+    // A joiner rendezvouses on the typed code; a creator gets the server to allocate one.
+    const routingId = this.config.create ? '' : this.config.code;
     const iceServers = await fetchIceServers();
     const connection = createRtcConnection(iceServers);
     this.transfer = connection.transfer;
@@ -103,7 +93,7 @@ export class DuoDropController {
           this.wireReceiver();
         },
       },
-      { sas, create: sas && this.config.create },
+      { sas: true, create: this.config.create },
     );
     session.start();
   }

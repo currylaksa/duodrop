@@ -1,30 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { secretFromScan } from './qr';
-import {
-  generatePairingSecret,
-  buildShareLink,
-  encodeSecret,
-} from '../shared/src/pairing';
+import { buildRoomLink, roomFromScan } from './qr';
 
-describe('QR join (phase 5): a scanned share link recovers the same Pairing secret', () => {
-  it('recovers the secret from a scanned share link', () => {
-    const secret = generatePairingSecret();
-    const link = buildShareLink(secret, 'https://duodrop.app');
-
-    const recovered = secretFromScan(link);
-    expect(recovered).not.toBeNull();
-    expect([...recovered!]).toEqual([...secret]); // identical secret — same as opening the link
+describe('QR join (SAS path): a scanned link recovers the non-secret room code', () => {
+  it('round-trips a room code through a built link', () => {
+    const link = buildRoomLink('4821', 'https://duodrop.app');
+    expect(link).toBe('https://duodrop.app/#room=4821');
+    expect(roomFromScan(link)).toBe('4821');
   });
 
-  it('also tolerates a bare typed code, so a code-bearing QR still works', () => {
-    const secret = generatePairingSecret();
-    const recovered = secretFromScan(encodeSecret(secret));
-    expect([...recovered!]).toEqual([...secret]);
+  it('also tolerates a bare 4-digit code, so a code-only QR still works', () => {
+    expect(roomFromScan('0007')).toBe('0007');
+    expect(roomFromScan('  4821 ')).toBe('4821');
   });
 
-  it('returns null for text that is not a DuoDrop secret', () => {
-    expect(secretFromScan('https://example.com/hello')).toBeNull();
-    expect(secretFromScan('not a qr payload')).toBeNull();
-    expect(secretFromScan('')).toBeNull();
+  it('returns null for text that carries no room code', () => {
+    expect(roomFromScan('https://example.com/hello')).toBeNull();
+    expect(roomFromScan('not a qr payload')).toBeNull();
+    expect(roomFromScan('12345')).toBeNull();
+    expect(roomFromScan('')).toBeNull();
   });
 });

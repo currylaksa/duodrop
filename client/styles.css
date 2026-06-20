@@ -279,6 +279,7 @@ body::after{
 .linklike{margin-top:18px;background:none;border:none;color:var(--fg-dim);font-family:var(--body);
   font-size:13px;cursor:pointer;padding:0;transition:.18s}
 .linklike:hover{color:var(--signal)}
+.hint-row{margin-top:18px;color:var(--fg-faint);font-family:var(--mono);font-size:11px;letter-spacing:.04em}
 .btn-danger{background:transparent;border-color:var(--danger);color:var(--danger)}
 .btn-danger:hover{background:var(--danger);color:#0A0B0D;border-color:var(--danger)}
 .roomcode{font-family:var(--mono);font-weight:700;font-size:clamp(44px,9vw,72px);letter-spacing:.18em;

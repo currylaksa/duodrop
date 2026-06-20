@@ -8,11 +8,12 @@ hostile. Two devices pair, then send files directly device-to-device over WebRTC
 application-layer end-to-end encryption. The signaling server only brokers the handshake and
 must learn nothing about file contents or the encryption key.
 
-The pairing UX is built around that hostile setting. The **primary** way in is a short,
-**non-secret** room code authenticated by a human emoji compare (SAS, [ADR 0003](docs/adr/0003-short-code-sas-pairing.md)) —
-nothing long to type, no account. The high-entropy-secret path survives only as a **QR /
-share-link** transport (camera or remote case); the secret is **never hand-typed to join**
-([ADR 0004](docs/adr/0004-drop-typed-secret-join.md)).
+Pairing is **one path** (SAS, [ADR 0003](docs/adr/0003-short-code-sas-pairing.md) /
+[ADR 0005](docs/adr/0005-sas-only-room-code-qr.md)): the server allocates a short,
+**non-secret** 4-digit **room code**; the other device types it or scans its QR; then both
+humans compare a 4-emoji safety string before any bytes flow. There is no pre-shared secret
+and nothing long to type. (An earlier high-entropy **pairing secret** path was removed —
+ADR 0005; its modules linger as unused code.)
 
 ## Language
 
@@ -26,49 +27,43 @@ chosen after pairing, not fixed by who created the room.
 The ephemeral, two-peer matching context held in the signaling server's memory. Exists
 only to relay the handshake between exactly two peers, then is torn down.
 
-**Pairing secret**:
-The shared, **high-entropy** (128-bit) secret both peers know and from which the
-encryption key is derived. It rides inside a QR or share link (base64url) and is **never
-sent to the signaling server**. It is the pairing primitive for the **QR / link path**. It
-is deliberately *not* a short memorable code — a short code could be brute-forced by a
-malicious server from the Routing ID — so it is **never hand-typed to join** (typing 128
-bits is hostile, doubly so on a public device). The typed case is served instead by the
-**Room code** below, which is non-secret. (Historically the secret had a ~22-char base32
-typed fallback; [ADR 0004](docs/adr/0004-drop-typed-secret-join.md) removed it.)
-_Avoid_: room code, pairing code, short code, passphrase.
+**Room code**:
+The short, **non-secret**, server-allocated 4-digit number the two peers rendezvous on (SAS,
+ADR 0003) — it *is* the Routing ID for this path. Security comes from the emoji compare, not
+from the code, so the server may mint and see it, and its QR (`…/#room=<code>`) may be shown
+or photographed freely. It carries no key.
+_Avoid_: treating its secrecy as protective; conflating it with the removed pairing secret.
 
 **Routing ID**:
-The value the signaling server matches the two peers on. Derived from the pairing secret
-by domain-separated hashing so it shares no bits with the Pairing key. Because the secret
-is high-entropy, the server cannot brute-force the secret back out of the Routing ID. The
-server sees only this, never the pairing secret.
-_Avoid_: room code, room ID.
+The value the signaling server matches the two peers on. Today this *is* the **Room code** —
+a non-secret, server-allocated 4-digit number. (Historically it was a hash of the pairing
+secret; that path is retired with the secret, ADR 0005.) The server allocates and sees it; it
+carries nothing that decrypts the file.
+_Avoid_: room ID; implying it is secret.
 
-**Pairing key**:
-The symmetric key derived from the **pairing secret**, used to encrypt and decrypt file
-chunks on the QR / link path. One per pairing. (The Room-code path derives its *own*
-symmetric key — the SAS **session key** — from an ephemeral key exchange, not from any
-pairing secret; ADR 0003. Both feed the same encryption stream, so don't use "session key"
-loosely for the Pairing key.)
+**Session key**:
+The 32-byte symmetric key that encrypts and decrypts file chunks, one per pairing. Both peers
+derive it from the SAS ephemeral X25519 exchange over a shared transcript (ADR 0003) — never
+from a typed secret, and **never sent to the signaling server**. (Formerly there was also a
+secret-derived "Pairing key"; retired with the secret, ADR 0005.)
+_Avoid_: calling it the "pairing key".
 
 **Join method**:
-How the second peer pairs. Two families now exist:
-1. **Room code** (primary; SAS, ADR 0003) — the joiner types a short, non-secret 4-digit
-   code and both humans compare a 4-emoji safety string. No secret to type, no account; the
-   friendly path for a public or camera-less device.
-2. **Pairing-secret transport** — the joiner obtains the high-entropy **pairing secret** out
-   of band, by **scanning the QR** or **opening the share link**. Both carry the *same*
-   secret and reveal nothing to the server; the QR suits a phone, the link suits remote.
-**Hand-typing the pairing secret has been removed** (ADR 0004) — the Room code covers the
-typed case instead.
-_Avoid_: treating QR as the primary way in; calling the typed long secret a join method.
+How the second peer pairs — now a single path. The server allocates a non-secret 4-digit
+**Room code**; the joiner **types it** or **scans / opens its QR** (the QR encodes
+`…/#room=<code>`, so a scan or an opened link joins the same room as typing). Both peers then
+run the SAS ephemeral-key exchange and compare a 4-emoji safety string. No camera is required
+(typing always works); no account; no secret.
+_Avoid_: calling QR and typing separate "methods" — they reach the same Room code; treating
+the removed long secret as a join method.
 
-**Room code**:
-The short, **non-secret**, server-allocated 4-digit number for the SAS path (ADR 0003). It
-is a human-friendly **Routing ID** the two peers rendezvous on — security comes from the
-emoji compare, not from the code, so the server may mint and see it. Distinct from the
-**pairing secret**, which it never carries.
-_Avoid_: conflating it with the pairing secret; treating its secrecy as protective.
+**Pairing secret** (retired, ADR 0005):
+A former 128-bit shared secret from which the encryption key was derived, carried by QR /
+link and never sent to the server. Removed from the product — a co-located public device
+wants neither a long secret to type nor a secret on screen, and the non-secret Room code plus
+emoji compare covers the job. The term now survives only in ADR 0001 and in the unused
+`shared/src/pairing/{secret,derive,base32,link}.ts`.
+_Avoid_: presenting it as a current way to pair.
 
 ### Transfer
 
@@ -86,19 +81,15 @@ _Avoid_: batch, bundle.
 
 ### Flagged ambiguities
 
-- The word "code" is now overloaded three ways: the **pairing secret** (secures; never
-  typed, never sent to the server), the **Routing ID** (routes; server-visible hash), and
-  the **Room code** (the SAS path's non-secret 4-digit routing rendezvous). The Room code is
-  a kind of Routing ID; neither it nor the Routing ID is ever the secret. When a design note
-  says "the code," decide which of the three is meant.
+- "Code" now means the **Room code** — which is also the **Routing ID** the server matches
+  on. It is non-secret. There is no longer a high-entropy secret to confuse it with (ADR
+  0005), so the old "which code?" ambiguity collapses to one.
 
 ## Example dialogue
 
 > **Dev:** "Where does the server look up the room?"
-> **Expert:** "By the Routing ID — the hash. It never sees the Pairing secret."
-> **Dev:** "So how does the other peer get the Pairing secret?"
-> **Expert:** "Out of band: it's in the link fragment or the QR — never typed by hand. The
-> server relays handshake messages for that Routing ID but can't derive the Pairing key."
-> **Dev:** "And the short room code?"
-> **Expert:** "Different path entirely — that's the SAS Room code. It carries no secret; the
-> two humans compare four emoji to authenticate. The server allocates and sees the code."
+> **Expert:** "By the Room code — the 4-digit number it allocated. That's the Routing ID."
+> **Dev:** "Isn't a short code brute-forceable?"
+> **Expert:** "There's nothing on it to brute-force — no secret rides it. The key comes from
+> an ephemeral X25519 exchange the two devices run, and the humans compare four emoji to catch
+> a relay-in-the-middle. The server only relays and never holds the key."

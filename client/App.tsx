@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  generatePairingSecret,
-  deriveRoutingId,
-  encodeSecret,
-  buildShareLink,
-  parseShareLink,
-} from '../shared/src/pairing';
 import { DuoDropController, type TransferItem, type ControllerConfig } from './controller';
 import { QrCode } from './QrCode';
 import { QrScanner } from './QrScanner';
+import { buildRoomLink, roomFromScan } from './qr';
 
-type View = 'home' | 'create' | 'join' | 'xfer' | 'sas-wait' | 'sas-compare';
+type View = 'home' | 'join' | 'xfer' | 'sas-wait' | 'sas-compare';
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -39,58 +33,15 @@ function percent(item: TransferItem): number {
   return Math.min(100, Math.floor((item.transferred / item.size) * 100));
 }
 
-function ConnectOverlay({ onDone }: { onDone: () => void }) {
-  const lines = [
-    'routing id — HKDF(secret, "routing")',
-    'signaling — matched on routing id',
-    'ICE — gathering candidates',
-    'DTLS — transport secured',
-    'secretstream — XChaCha20-Poly1305',
-    'data channel — open',
-  ];
-  const [shown, setShown] = useState(0);
-  const [done, setDone] = useState(false);
-
-  useEffect(() => {
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    lines.forEach((_, i) => timers.push(setTimeout(() => setShown(i + 1), 240 + i * 300)));
-    const doneAt = 240 + lines.length * 300 + 200;
-    timers.push(setTimeout(() => setDone(true), doneAt));
-    timers.push(setTimeout(onDone, doneAt + 900));
-    return () => timers.forEach(clearTimeout);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div className="overlay on">
-      <div className="console">
-        <div className="eyebrow">establishing secure channel</div>
-        {lines.map((line, i) => (
-          <div key={line} className={`line${i < shown ? ' show' : ''}`}>
-            <span>{line}</span>
-            <span className="ok">[ok]</span>
-          </div>
-        ))}
-        <div className={`done${done ? ' show' : ''}`}>
-          <span className="lk">🔒</span> SECURE CHANNEL ESTABLISHED
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function App() {
   const [view, setView] = useState<View>('home');
-  const [secret, setSecret] = useState<Uint8Array | null>(null);
-  const [routingId, setRoutingId] = useState('');
   const [items, setItems] = useState<TransferItem[]>([]);
-  const [connecting, setConnecting] = useState(false);
   const [drag, setDrag] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [toastOn, setToastOn] = useState(false);
-  // SAS short-code path (ADR 0003) — laptop ↔ laptop, no camera.
-  const [sasMode, setSasMode] = useState(false);
+  // SAS short-code path (ADR 0003/0005) — the only pairing path: a non-secret room code
+  // plus a 4-emoji safety-string compare.
   const [sasConnected, setSasConnected] = useState(false);
   const [roomCode, setRoomCode] = useState('');
   const [roomInput, setRoomInput] = useState('');
@@ -112,16 +63,8 @@ export function App() {
     // One session per page load — also guards against StrictMode's double-mount.
     if (startedRef.current) return;
     startedRef.current = true;
-    const sas = config.mode === 'sas';
-    setSasMode(sas);
-    if (config.mode === 'secret') {
-      setSecret(config.secret);
-      setRoutingId(await deriveRoutingId(config.secret));
-    }
     const controller = new DuoDropController(config, {
-      // SAS pairing inserts a human safety-string match before the transfer view; the secret
-      // path goes straight through its connect overlay to the transfer view.
-      onConnected: () => (sas ? setSasConnected(true) : setConnecting(true)),
+      onConnected: () => setSasConnected(true),
       onRoomCreated: (code) => setRoomCode(code),
       onSafetyString: (emoji) => setSafety(emoji),
       onItemAdd: (item) => setItems((prev) => [item, ...prev]),
@@ -155,32 +98,43 @@ export function App() {
     }
   }, [toast]);
 
-  // The QR/long-link path is always secret-based; keep its one-arg call sites unchanged.
-  const beginSession = useCallback(
-    (s: Uint8Array) => startController({ mode: 'secret', secret: s }),
-    [startController],
+  const createSasRoom = useCallback(() => {
+    void startController({ create: true });
+    setView('sas-wait');
+  }, [startController]);
+
+  const joinRoom = useCallback(
+    (code: string) => {
+      if (!/^\d{4}$/.test(code.trim())) {
+        toast('Enter the 4-digit room code from the other device');
+        return;
+      }
+      const room = code.trim();
+      setRoomInput(room);
+      void startController({ create: false, code: room });
+      setView('sas-wait');
+    },
+    [startController, toast],
   );
 
-  // Once a SAS room is both connected and has its safety string, show the match gate.
+  // Once the room is both connected and has its safety string, show the match gate.
   useEffect(() => {
-    if (sasMode && sasConnected && safety.length && view === 'sas-wait') setView('sas-compare');
-  }, [sasMode, sasConnected, safety, view]);
+    if (sasConnected && safety.length && view === 'sas-wait') setView('sas-compare');
+  }, [sasConnected, safety, view]);
 
-  // Joining peer: the secret rides in the share link's #fragment. Handle both a fresh page load
-  // and a link pasted into the address bar of an already-open tab — a fragment-only change fires
-  // `hashchange` without a reload, so a one-shot mount read would silently miss it.
+  // Joining by an opened or scanned link: the non-secret room code rides in the #fragment
+  // (…#room=4821), so a phone-camera scan that opens the URL joins straight away. Handle a
+  // fresh load and a link dropped into the address bar of an open tab — a fragment-only change
+  // fires `hashchange` without a reload, which a one-shot mount read would miss.
   useEffect(() => {
     const tryJoin = () => {
-      const joining = parseShareLink(location.href);
-      if (joining) {
-        setView('join');
-        void beginSession(joining);
-      }
+      const code = roomFromScan(location.href);
+      if (code) joinRoom(code);
     };
     tryJoin();
     window.addEventListener('hashchange', tryJoin);
     return () => window.removeEventListener('hashchange', tryJoin);
-  }, [beginSession]);
+  }, [joinRoom]);
 
   // Mobile resilience: a backgrounded tab can have its connection torn down mid-transfer,
   // which drops us into the re-pair model. Warn while a transfer is still in flight.
@@ -196,26 +150,6 @@ export function App() {
     return () => document.removeEventListener('visibilitychange', onHidden);
   }, [toast]);
 
-  const createChannel = useCallback(() => {
-    void beginSession(generatePairingSecret());
-    setView('create');
-  }, [beginSession]);
-
-  const createSasRoom = useCallback(() => {
-    void startController({ mode: 'sas', create: true });
-    setView('sas-wait');
-  }, [startController]);
-
-  const joinSasRoom = useCallback(() => {
-    const code = roomInput.trim();
-    if (!/^\d{4}$/.test(code)) {
-      toast('Enter the 4-digit room code from the other laptop');
-      return;
-    }
-    void startController({ mode: 'sas', create: false, code });
-    setView('sas-wait');
-  }, [roomInput, startController, toast]);
-
   // The security gate (ADR 0003): the transfer view — the only place files can be sent — is
   // unreachable until a human confirms the safety strings match on both screens.
   const confirmMatch = useCallback(() => setView('xfer'), []);
@@ -224,12 +158,11 @@ export function App() {
     location.href = location.origin;
   }, []);
 
-  const copyLink = useCallback(() => {
-    if (!secret) return;
-    const link = buildShareLink(secret, location.origin);
-    void navigator.clipboard?.writeText(link).catch(() => {});
-    toast('Link copied · secret stays in #fragment');
-  }, [secret, toast]);
+  const copyRoomLink = useCallback(() => {
+    if (!roomCode) return;
+    void navigator.clipboard?.writeText(buildRoomLink(roomCode, location.origin)).catch(() => {});
+    toast('Room link copied');
+  }, [roomCode, toast]);
 
   const sendFiles = useCallback((files: FileList | File[]) => {
     const list = Array.from(files);
@@ -239,8 +172,6 @@ export function App() {
   const endSession = useCallback(() => {
     location.href = location.origin;
   }, []);
-
-  const cipherGroups = secret ? encodeSecret(secret).split('-') : [];
 
   return (
     <div className="app">
@@ -252,15 +183,17 @@ export function App() {
           <div className="slash">// secure transfer</div>
         </div>
         <div className="statuschip">
-          <span className={`dot${view === 'xfer' ? ' live' : view === 'create' ? ' live' : ''}`} />
+          <span className={`dot${view === 'xfer' || view === 'sas-wait' ? ' live' : ''}`} />
           <span>
             {view === 'xfer'
               ? 'secure · connected'
-              : view === 'create'
-                ? 'channel open'
-                : view === 'join'
-                  ? 'joining…'
-                  : 'idle'}
+              : view === 'sas-wait'
+                ? 'room open'
+                : view === 'sas-compare'
+                  ? 'verify'
+                  : view === 'join'
+                    ? 'joining…'
+                    : 'idle'}
           </span>
         </div>
       </header>
@@ -282,15 +215,15 @@ export function App() {
                 </p>
                 <div className="actions">
                   <button className="btn btn-signal" onClick={createSasRoom}>
-                    Pair with a room code <span className="k">C</span>
+                    Create a room <span className="k">C</span>
                   </button>
-                  <button className="btn btn-ghost" onClick={createChannel}>
-                    Create a QR channel <span className="k">Q</span>
+                  <button className="btn btn-ghost" onClick={() => setView('join')}>
+                    Join a room <span className="k">J</span>
                   </button>
                 </div>
-                <button className="linklike" onClick={() => setView('join')}>
-                  Joining a device? Enter the room code or scan the QR →
-                </button>
+                <div className="hint-row">
+                  a 4-digit code + a QR · scan it or type it · then match four emoji
+                </div>
               </div>
               <div className="diagram">
                 <span className="corner tl" />
@@ -313,70 +246,6 @@ export function App() {
           </section>
         )}
 
-        {view === 'create' && (
-          <section className="view">
-            <div className="reveal">
-              <div className="eyebrow">channel open · waiting for peer</div>
-              <div className="pair" style={{ marginTop: 22 }}>
-                <div className="panel glow">
-                  <div className="panel-h">
-                    <span className="lbl">Pairing secret · 128-bit</span>
-                    <span className="tag ok">never sent to server</span>
-                  </div>
-                  <div className="panel-b">
-                    <div className="cipher">
-                      {cipherGroups.map((g, i) => (
-                        <span key={i}>
-                          {i > 0 && <span className="sep"> · </span>}
-                          <span className="g">{g}</span>
-                        </span>
-                      ))}
-                    </div>
-                    <div className="secret-note">
-                      <span className="lock">🔑</span>
-                      <span>whoever holds this can join &amp; decrypt — share it like a key</span>
-                    </div>
-                    <div className="deriv">
-                      <div className="deriv-row">
-                        <span className="key">Routing ID</span>
-                        <span className="val server">
-                          {routingId.slice(0, 8)}… · server sees only this
-                        </span>
-                      </div>
-                      <div className="deriv-row">
-                        <span className="key">Pairing key</span>
-                        <span className="val key">HKDF(secret, "encryption") · stays on device 🔒</span>
-                      </div>
-                    </div>
-                    <div className="actionsrow">
-                      <button className="btn btn-signal" onClick={copyLink}>
-                        Copy link <span className="k">⌘C</span>
-                      </button>
-                      <button className="btn btn-ghost" onClick={endSession}>
-                        Cancel
-                      </button>
-                    </div>
-                    <div className="waiting" style={{ marginTop: 22 }}>
-                      <span className="dot live" /> waiting for the other device…
-                    </div>
-                  </div>
-                </div>
-
-                <div className="panel">
-                  <div className="panel-h">
-                    <span className="lbl">Scan to join</span>
-                    <span className="tag ok">same secret</span>
-                  </div>
-                  <div className="qrwrap">
-                    {secret && <QrCode text={buildShareLink(secret, location.origin)} />}
-                    <div className="qr-cap">scan with the other device · or open the link</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
-
         {view === 'join' && (
           <section className="view">
             <div className="join reveal">
@@ -389,14 +258,14 @@ export function App() {
                 <input
                   value={roomInput}
                   onChange={(e) => setRoomInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                  onKeyDown={(e) => e.key === 'Enter' && joinSasRoom()}
+                  onKeyDown={(e) => e.key === 'Enter' && joinRoom(roomInput)}
                   placeholder="4-digit code · 0000"
                   inputMode="numeric"
                   autoComplete="off"
                 />
               </div>
               <div className="actions" style={{ justifyContent: 'center' }}>
-                <button className="btn btn-signal" onClick={joinSasRoom}>
+                <button className="btn btn-signal" onClick={() => joinRoom(roomInput)}>
                   Join room
                 </button>
                 <button className="btn btn-ghost" onClick={() => setScanning((on) => !on)}>
@@ -405,9 +274,9 @@ export function App() {
               </div>
               {scanning && (
                 <QrScanner
-                  onSecret={(s) => {
+                  onCode={(code) => {
                     setScanning(false);
-                    void beginSession(s);
+                    joinRoom(code);
                   }}
                   onCancel={() => setScanning(false)}
                 />
@@ -427,12 +296,21 @@ export function App() {
               {roomCode ? (
                 <>
                   <div className="eyebrow" style={{ justifyContent: 'center' }}>
-                    room open · waiting for the other laptop
+                    room open · waiting for the other device
                   </div>
                   <h2>Room code</h2>
-                  <p>Type this on the other laptop to pair.</p>
+                  <p>On the other device, type this code — or scan the QR.</p>
                   <div className="roomcode">{roomCode}</div>
-                  <div className="waiting" style={{ justifyContent: 'center', marginTop: 22 }}>
+                  <div className="qrwrap" style={{ marginTop: 18 }}>
+                    <QrCode text={buildRoomLink(roomCode, location.origin)} />
+                    <div className="qr-cap">scan to join · the code is not a secret</div>
+                  </div>
+                  <div className="actions" style={{ justifyContent: 'center', marginTop: 18 }}>
+                    <button className="btn btn-ghost" onClick={copyRoomLink}>
+                      Copy room link
+                    </button>
+                  </div>
+                  <div className="waiting" style={{ justifyContent: 'center', marginTop: 18 }}>
                     <span className="dot live" /> waiting for the other device…
                   </div>
                 </>
@@ -442,7 +320,7 @@ export function App() {
                     joining room {roomInput}
                   </div>
                   <h2>Connecting…</h2>
-                  <p>Pairing with the other laptop over the relay.</p>
+                  <p>Pairing with the other device over the relay.</p>
                   <div className="waiting" style={{ justifyContent: 'center', marginTop: 22 }}>
                     <span className="dot live" /> establishing the channel…
                   </div>
@@ -611,15 +489,6 @@ export function App() {
         </div>
         <div className="net">routing on hashed id · bytes go direct</div>
       </footer>
-
-      {connecting && (
-        <ConnectOverlay
-          onDone={() => {
-            setConnecting(false);
-            setView('xfer');
-          }}
-        />
-      )}
 
       <div className={`toast${toastOn ? ' on' : ''}`}>
         <span className="k">✓</span>
