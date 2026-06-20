@@ -1,8 +1,8 @@
 # Cloudflare Pages security headers (phase 5, ADR 0002).
 # connect-src allows the signaling server (Render) over HTTPS + WSS and the Cloudflare TURN
-# API. Replace *.onrender.com with your exact signaling host to tighten it.
+# API, pinned to the exact deployed signaling host.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.onrender.com wss://*.onrender.com https://rtc.live.cloudflare.com; worker-src 'self'; manifest-src 'self'; base-uri 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://duodrop-signaling.onrender.com wss://duodrop-signaling.onrender.com https://rtc.live.cloudflare.com; worker-src 'self'; manifest-src 'self'; base-uri 'self'; frame-ancestors 'none'
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   X-Content-Type-Options: nosniff
