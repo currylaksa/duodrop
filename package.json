@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "description": "Zero-trust, E2E-encrypted, P2P file transfer over WebRTC.",
+  "engines": {
+    "node": ">=20"
+  },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/libsodium-wrappers": "^0.7.14",
