@@ -1,9 +1,12 @@
 /**
- * Receive sink (phase 3). Resolves the brief's Blob-vs-stream contradiction with an honest,
- * per-browser ceiling: where the File System Access API exists (Chromium/desktop) we stream
- * each chunk straight to disk via `showSaveFilePicker()` — effectively no size limit; where it
- * doesn't (Firefox, iOS Safari) we fall back to the in-memory Blob path from issue 002, with a
- * documented cap the caller warns past. The mode is chosen at runtime per file.
+ * Receive sink (phase 3 + big-file streaming). Where the File System Access API exists (desktop
+ * Chromium) we stream each chunk straight to disk — effectively no size limit and no RAM
+ * buffering. But `showSaveFilePicker()` needs a user gesture, while chunks arrive on a network
+ * event (no gesture), so the stream sink starts by buffering and exposes `promptSave()` for a
+ * Save button to call from a real click: it opens the picker, flushes what buffered so far, then
+ * streams the rest straight to disk. Where the API is absent (Firefox, iOS Safari) — or the user
+ * never picks a location — it degrades to the in-memory Blob download from issue 002, with a
+ * documented cap the caller warns past.
  */
 import type { FileMeta } from '../shared/src/transfer/transfer';
 import { downloadChunks } from './download';
@@ -14,6 +17,9 @@ export interface ReceiveSink {
   readonly mode: SinkMode;
   write(chunk: Uint8Array): Promise<void>;
   close(): Promise<void>;
+  /** Stream mode only: open the OS save dialog (must be called from a user gesture) and stream
+   * to disk, flushing whatever buffered before the click. No-op once a save is under way. */
+  promptSave?(): Promise<void>;
 }
 
 /** Above this size the in-memory fallback risks crashing the tab; the caller warns past it. */
@@ -33,14 +39,62 @@ export function canStreamToDisk(): boolean {
   return typeof (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker === 'function';
 }
 
-async function createStreamSink(meta: FileMeta): Promise<ReceiveSink> {
+function createStreamSink(meta: FileMeta): ReceiveSink {
   const picker = (globalThis as unknown as { showSaveFilePicker: SaveFilePicker }).showSaveFilePicker;
-  const handle = await picker({ suggestedName: meta.name });
-  const writable = await handle.createWritable();
+  let writable: WritableLike | null = null;
+  let buffer: Uint8Array[] = [];
+  let saving = false; // a picker call is in flight or has succeeded
+  let closed = false;
+
+  // Writes arrive on the network; promptSave fires on a UI click; close ends the stream. Run
+  // them through one chain so the buffer flush never interleaves with a write or the close.
+  let tail: Promise<void> = Promise.resolve();
+  const serial = (fn: () => Promise<void>): Promise<void> => {
+    const run = tail.then(fn);
+    tail = run.catch(() => {});
+    return run;
+  };
+
+  const blobFallback = (): void => {
+    downloadChunks(meta, buffer);
+    buffer = [];
+  };
+
   return {
     mode: 'stream',
-    write: (chunk) => writable.write(chunk),
-    close: () => writable.close(),
+    write: (chunk) =>
+      serial(async () => {
+        if (writable) await writable.write(chunk);
+        else buffer.push(chunk);
+      }),
+    promptSave: async () => {
+      if (saving) return;
+      saving = true;
+      let w: WritableLike;
+      try {
+        // picker() must be the first call (before any await) to keep the click's activation.
+        const handle = await picker({ suggestedName: meta.name });
+        w = await handle.createWritable();
+      } catch {
+        saving = false; // cancelled — keep buffering; close() falls back to the blob download
+        if (closed) await serial(async () => blobFallback());
+        return;
+      }
+      await serial(async () => {
+        writable = w;
+        const pending = buffer;
+        buffer = [];
+        for (const c of pending) await w.write(c);
+        if (closed) await w.close(); // the file finished arriving before the user picked
+      });
+    },
+    close: () =>
+      serial(async () => {
+        closed = true;
+        if (writable) await writable.close();
+        else if (!saving) blobFallback();
+        // else: a picker is in flight — its flush sees `closed` and closes the writable.
+      }),
   };
 }
 
@@ -60,13 +114,6 @@ function createBlobSink(meta: FileMeta): ReceiveSink {
 }
 
 /** Pick the streaming sink where supported, falling back to the in-memory Blob otherwise. */
-export async function createReceiveSink(meta: FileMeta): Promise<ReceiveSink> {
-  if (canStreamToDisk()) {
-    try {
-      return await createStreamSink(meta);
-    } catch {
-      // Picker cancelled or unavailable at runtime — degrade to the in-memory path.
-    }
-  }
-  return createBlobSink(meta);
+export function createReceiveSink(meta: FileMeta): ReceiveSink {
+  return canStreamToDisk() ? createStreamSink(meta) : createBlobSink(meta);
 }

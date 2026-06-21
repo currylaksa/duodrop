@@ -68,6 +68,8 @@ export function App() {
       onRoomCreated: (code) => setRoomCode(code),
       onSafetyString: (emoji) => setSafety(emoji),
       onItemAdd: (item) => setItems((prev) => [item, ...prev]),
+      onItemCanSave: (id) =>
+        setItems((prev) => prev.map((i) => (i.id === id ? { ...i, canSave: true } : i))),
       onItemProgress: (id, transferred, speed) =>
         setItems((prev) => prev.map((i) => (i.id === id ? { ...i, transferred, speed } : i))),
       onItemDone: (id) =>
@@ -462,6 +464,18 @@ export function App() {
                         <div className="check">✓</div>
                       ) : item.status === 'error' ? (
                         <div className="xmark">✕</div>
+                      ) : item.direction === 'receive' && item.canSave ? (
+                        <button
+                          className="savebtn"
+                          onClick={() => {
+                            controllerRef.current?.saveReceive(item.id);
+                            setItems((prev) =>
+                              prev.map((i) => (i.id === item.id ? { ...i, canSave: false } : i)),
+                            );
+                          }}
+                        >
+                          Save
+                        </button>
                       ) : (
                         <div className="pct">{percent(item)}%</div>
                       )}

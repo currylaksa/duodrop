@@ -23,12 +23,17 @@ export interface SendEncryptedOptions {
   onProgress?: (sent: number, total: number) => void;
 }
 
-/** Encrypt a file as a secretstream and pump it over the channel with backpressure. */
-export async function sendEncryptedFile(
+/**
+ * Encrypt a Blob/File as a secretstream and pump it over the channel with backpressure. Each
+ * `chunkSize` slice is read from disk on demand via `Blob.slice()`, so even a multi-GB file
+ * never loads into memory and never hits the ~2 GiB typed-array cap — the send-side counterpart
+ * to the receiver's streaming-to-disk sink.
+ */
+export async function sendEncryptedBlob(
   channel: SendChannel,
   encryptor: Encryptor,
   meta: FileMeta,
-  data: Uint8Array,
+  blob: Blob,
   opts: SendEncryptedOptions = {},
 ): Promise<void> {
   const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK_SIZE;
@@ -43,15 +48,27 @@ export async function sendEncryptedFile(
   await send(encryptor.header);
   await send(encryptor.encrypt(encoder.encode(JSON.stringify(meta)), false));
 
-  if (data.length === 0) {
-    await send(encryptor.encrypt(new Uint8Array(0), true));
+  if (blob.size === 0) {
+    await send(encryptor.encrypt(EMPTY, true));
     return;
   }
-  for (let offset = 0; offset < data.length; offset += chunkSize) {
-    const end = Math.min(offset + chunkSize, data.length);
-    await send(encryptor.encrypt(data.subarray(offset, end), end >= data.length));
-    opts.onProgress?.(end, data.length);
+  for (let offset = 0; offset < blob.size; offset += chunkSize) {
+    const end = Math.min(offset + chunkSize, blob.size);
+    const chunk = new Uint8Array(await blob.slice(offset, end).arrayBuffer());
+    await send(encryptor.encrypt(chunk, end >= blob.size));
+    opts.onProgress?.(end, blob.size);
   }
+}
+
+/** In-memory convenience wrapper (used by tests); streams the bytes through `sendEncryptedBlob`. */
+export function sendEncryptedFile(
+  channel: SendChannel,
+  encryptor: Encryptor,
+  meta: FileMeta,
+  data: Uint8Array,
+  opts: SendEncryptedOptions = {},
+): Promise<void> {
+  return sendEncryptedBlob(channel, encryptor, meta, new Blob([data as BlobPart]), opts);
 }
 
 /** Decrypt an incoming secretstream back into the original file bytes. */

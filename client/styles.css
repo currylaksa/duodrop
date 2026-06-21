@@ -204,6 +204,9 @@ body::after{
 .track.err .fill{background:var(--danger);box-shadow:none}
 .file .right{text-align:right;font-family:var(--mono);font-size:11px;color:var(--fg)}
 .file .right .pct{font-size:14px;font-weight:600}
+.file .right .savebtn{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  color:#0b0d0a;background:var(--signal);border:0;border-radius:6px;padding:5px 11px;cursor:pointer;font-weight:600}
+.file .right .savebtn:hover{background:var(--signal-2)}
 .file .check{color:var(--signal);font-size:18px}
 .file .xmark{color:var(--danger);font-size:18px}
 
