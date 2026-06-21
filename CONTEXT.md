@@ -1,10 +1,17 @@
 # DuoDrop
 
-A browser-based, zero-install P2P file transfer app for one specific problem: **getting a
-file onto an untrusted, co-located device — a print-shop PC, a lab machine — without
-signing into Telegram / WhatsApp / Drive on it.** Logging a messaging account into a public
-machine is the thing to avoid; so is hand-typing a long secret on it, which is just as
-hostile. Two devices pair, then send files directly device-to-device over WebRTC with
+A browser-based, zero-install P2P file transfer app, built for two intertwined goals:
+
+1. **Privacy on an untrusted device** — getting a file onto an untrusted, co-located device,
+   a print-shop PC or a lab machine, **without signing into Telegram / WhatsApp / Drive on
+   it.** Logging a messaging account into a public machine is the thing to avoid; so is
+   hand-typing a long secret on it, which is just as hostile.
+2. **Original quality** — an **AirDrop alternative that ships the original bytes**:
+   byte-exact, lossless, any file type or size, with none of the recompression messaging
+   apps apply to photos. (So transfers stay byte-exact — no image transcoding or other
+   quality-reducing steps.)
+
+Two devices pair, then send files directly device-to-device over WebRTC with
 application-layer end-to-end encryption. The signaling server only brokers the handshake and
 must learn nothing about file contents or the encryption key.
 
