@@ -7,7 +7,7 @@
 
 import { PairingSession } from '../shared/src/signaling/session';
 import { ready, createEncryptor } from '../shared/src/crypto/secretstream';
-import { sendEncryptedFile, EncryptedReceiver } from '../shared/src/transfer/encrypted-transfer';
+import { sendEncryptedBlob, EncryptedReceiver } from '../shared/src/transfer/encrypted-transfer';
 import type { FileMeta } from '../shared/src/transfer/transfer';
 import { createRtcConnection, type TransferChannel } from './peer-connection';
 import { createSignalLink } from './signal-socket';
@@ -28,6 +28,8 @@ export interface TransferItem {
   status: ItemStatus;
   speed: number;
   error?: string;
+  /** UI-only: this incoming file can be streamed to disk via a gesture-gated Save button. */
+  canSave?: boolean;
 }
 
 export interface ControllerHandlers {
@@ -42,6 +44,9 @@ export interface ControllerHandlers {
   onRoomCreated?(code: string): void;
   /** SAS path: the emoji safety string the humans compare before any bytes flow. */
   onSafetyString?(safetyString: string[]): void;
+  /** This browser can stream the incoming file straight to disk — surface a Save button whose
+   * click calls `saveReceive(id)` (the OS save dialog needs a user gesture). */
+  onItemCanSave?(id: string): void;
 }
 
 /**
@@ -65,6 +70,9 @@ export class DuoDropController {
   private key: Uint8Array | undefined;
   private channelOpen = false;
   private wired = false;
+  // The receive in flight (transfers are sequential), so a Save click can reach its sink.
+  private activeSink: ReceiveSink | null = null;
+  private activeReceiveId = '';
 
   constructor(
     private readonly config: ControllerConfig,
@@ -118,7 +126,7 @@ export class DuoDropController {
     // The sink (disk stream or in-memory blob) is opened when the file starts; chunks arrive
     // synchronously but write asynchronously, so a promise chain keeps writes ordered and the
     // close after the last write.
-    let sinkReady: Promise<ReceiveSink> | null = null;
+    let sink: ReceiveSink | null = null;
     let writeChain: Promise<void> = Promise.resolve();
     const receiver = new EncryptedReceiver(this.key!, {
       onStart: (meta) => {
@@ -133,30 +141,33 @@ export class DuoDropController {
           status: 'active',
           speed: 0,
         });
-        sinkReady = createReceiveSink(meta).then((sink) => {
-          if (sink.mode === 'blob' && meta.size > BLOB_FALLBACK_CAP) {
-            this.handlers.onWarn?.(
-              `Large file — this browser saves it in memory, which may strain the tab.`,
-            );
-          }
-          return sink;
-        });
+        sink = createReceiveSink(meta);
+        this.activeSink = sink;
+        this.activeReceiveId = receiveId;
+        if (sink.promptSave) {
+          // Stream-capable: let the UI offer a Save button (the picker needs a gesture).
+          this.handlers.onItemCanSave?.(receiveId);
+        } else if (meta.size > BLOB_FALLBACK_CAP) {
+          this.handlers.onWarn?.(
+            `Large file — this browser saves it in memory, which may strain the tab.`,
+          );
+        }
       },
       onProgress: (received) =>
         this.handlers.onItemProgress(receiveId, received, speed.sample(performance.now(), received)),
       onChunk: (plain) => {
-        const ready = sinkReady!;
-        writeChain = writeChain.then(() => ready).then((sink) => sink.write(plain));
+        const s = sink!;
+        writeChain = writeChain.then(() => s.write(plain));
       },
       onComplete: () => {
         const id = receiveId;
         // No receive is in flight until the next file's onStart; clearing this stops a stray
         // post-completion error from mislabelling the file that just finished.
         receiveId = '';
-        const ready = sinkReady!;
+        this.activeReceiveId = '';
+        const s = sink!;
         writeChain = writeChain
-          .then(() => ready)
-          .then((sink) => sink.close())
+          .then(() => s.close())
           .then(() => this.handlers.onItemDone(id));
       },
     });
@@ -170,6 +181,12 @@ export class DuoDropController {
         if (receiveId) this.handlers.onItemError(receiveId, 'Transfer failed — stream could not be decrypted');
       }
     });
+  }
+
+  /** Open the OS save dialog for the in-flight receive and stream it to disk. Must be called
+   * straight from a user gesture (a click) — the picker needs transient activation. */
+  saveReceive(id: string): void {
+    if (id === this.activeReceiveId) void this.activeSink?.promptSave?.();
   }
 
   async sendFiles(files: File[]): Promise<void> {
@@ -190,9 +207,9 @@ export class DuoDropController {
       const speed = new SpeedSampler();
       const meta: FileMeta = { name: file.name, size: file.size, type: file.type };
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        // Stream the file from disk a chunk at a time — never read the whole thing into RAM.
         // A fresh encryptor per file: each Transfer is its own one-directional stream.
-        await sendEncryptedFile(transfer, createEncryptor(key), meta, bytes, {
+        await sendEncryptedBlob(transfer, createEncryptor(key), meta, file, {
           onProgress: (sent) =>
             this.handlers.onItemProgress(id, sent, speed.sample(performance.now(), sent)),
         });
