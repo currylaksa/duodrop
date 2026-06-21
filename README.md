@@ -2,31 +2,48 @@
 
 # 🫳 DuoDrop
 
-**AirDrop for everyone — original quality, zero trust, no app, no account.**
+### AirDrop for *everyone* — original quality, zero trust, no app, no account.
 
 Send a file straight from one device to another over WebRTC, end-to-end encrypted.
-The server brokers the handshake and learns *nothing* — not the file, not the key.
+The server brokers the handshake and learns **nothing** — not the file, not the key.
 
-[**🚀 Live: duodrop.pages.dev**](https://duodrop.pages.dev) · [Glossary](CONTEXT.md) · [ADRs](docs/adr/)
+[![Live Demo](https://img.shields.io/badge/▶_Live_Demo-duodrop.pages.dev-6C47FF?style=for-the-badge)](https://duodrop.pages.dev)
+
+![React](https://img.shields.io/badge/React_19-20232A?style=flat&logo=react&logoColor=61DAFB)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)
+![WebRTC](https://img.shields.io/badge/WebRTC-333333?style=flat&logo=webrtc&logoColor=white)
+![libsodium](https://img.shields.io/badge/libsodium-XChaCha20--Poly1305-2E7D32?style=flat)
+![PWA](https://img.shields.io/badge/PWA-installable-5A0FC8?style=flat)
+
+[Live demo](https://duodrop.pages.dev) · [Glossary](CONTEXT.md) · [Architecture decisions](docs/adr/)
 
 </div>
 
 ---
 
-## Why this exists
+> **Ever needed to print a document at a shop — and realised the only way to get the file
+> there was to log into your WhatsApp or Drive on *their* computer? 😬**
 
-Two everyday problems, one tool:
+That moment is why DuoDrop exists. Open the site on both devices, match a 4-digit code and
+four emoji, and the file flies straight across — **no install, no account, and nothing of
+yours left behind on a machine you don't trust.**
 
-1. **The untrusted machine.** You need a file on a print-shop PC or a lab computer, but
-   you do *not* want to log your Telegram / WhatsApp / Drive account into it — and typing a
-   long secret on a borrowed keyboard is just as hostile. DuoDrop needs neither.
+## ✨ Great for…
 
-2. **Original quality.** Messaging apps recompress your photos into mush. DuoDrop is an
-   **AirDrop alternative that ships the original bytes** — lossless, byte-exact, any file
-   type, any size — and it works PC↔phone, phone↔phone, and PC↔PC, across platforms, in
-   the browser.
+| | |
+|---|---|
+| 📱➡️💻 **"AirDrop" for Android** | iPhone→Android, Android→Windows, any mix. Stop emailing files to yourself to cross the platform gap. |
+| 🌍 **Long-distance transfers** | The two devices don't need the same room or Wi-Fi — send across the internet, browser to browser. |
+| 🎞️ **Files email won't take** | 4K videos, RAW photos, huge design files. No 25 MB limit, no "upload to Drive first." |
+| 🖼️ **Original-quality photos** | WhatsApp and Telegram squash your pictures. DuoDrop sends the *exact* bytes, every pixel. |
+| 🔌 **No cable, no dongle** | Phone → laptop without hunting for the right USB-C adapter. |
+| 🔒 **Borrowed / public PCs** | Get a file onto a machine you don't trust — without logging any account into it. |
 
-No install. No account. The bytes go **directly device-to-device**; they never touch a server.
+## 🔐 The bit I'm proud of
+
+**The server never sees your file — *or* the key to open it.** The two devices encrypt
+everything end-to-end between themselves. Even *I*, running the server, can't read what you
+send. The emoji check is there to prove no one is secretly sitting in the middle.
 
 ## How it works
 
