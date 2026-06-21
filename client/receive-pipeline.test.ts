@@ -14,8 +14,18 @@ import type { ReceiveSink } from './receive-sink';
 const KEY = new Uint8Array(32).fill(9);
 
 const downloaded: { meta: FileMeta; bytes: Uint8Array }[] = [];
+const join = (chunks: Uint8Array[]): Uint8Array => {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+};
 vi.mock('./download', () => ({
-  downloadBytes: (meta: FileMeta, bytes: Uint8Array) => downloaded.push({ meta, bytes }),
+  downloadChunks: (meta: FileMeta, chunks: Uint8Array[]) =>
+    downloaded.push({ meta, bytes: join(chunks) }),
 }));
 
 afterEach(() => {

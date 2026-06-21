@@ -6,7 +6,7 @@
  * documented cap the caller warns past. The mode is chosen at runtime per file.
  */
 import type { FileMeta } from '../shared/src/transfer/transfer';
-import { downloadBytes } from './download';
+import { downloadChunks } from './download';
 
 export type SinkMode = 'stream' | 'blob';
 
@@ -53,7 +53,7 @@ function createBlobSink(meta: FileMeta): ReceiveSink {
       return Promise.resolve();
     },
     close: () => {
-      downloadBytes(meta, concat(chunks));
+      downloadChunks(meta, chunks);
       return Promise.resolve();
     },
   };
@@ -69,15 +69,4 @@ export async function createReceiveSink(meta: FileMeta): Promise<ReceiveSink> {
     }
   }
   return createBlobSink(meta);
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((n, c) => n + c.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
 }

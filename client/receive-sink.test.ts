@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { FileMeta } from '../shared/src/transfer/transfer';
 
-const downloaded: { meta: FileMeta; bytes: Uint8Array }[] = [];
+const downloaded: { meta: FileMeta; chunks: Uint8Array[] }[] = [];
 vi.mock('./download', () => ({
-  downloadBytes: (meta: FileMeta, bytes: Uint8Array) => downloaded.push({ meta, bytes }),
+  downloadChunks: (meta: FileMeta, chunks: Uint8Array[]) => downloaded.push({ meta, chunks }),
 }));
 
 import { createReceiveSink, canStreamToDisk } from './receive-sink';
@@ -26,7 +26,8 @@ describe('receive sink (phase 3): stream to disk where possible, blob fallback o
     await sink.close();
 
     expect(downloaded).toHaveLength(1);
-    expect([...downloaded[0]!.bytes]).toEqual([1, 2, 3, 4, 5, 6]); // byte-identical
+    // Handed off as the chunk list — never concatenated into one (>2 GiB-capped) typed array.
+    expect(downloaded[0]!.chunks.map((c) => [...c])).toEqual([[1, 2, 3], [4, 5, 6]]);
   });
 
   it('streams each chunk straight to the writable, never buffering into a blob', async () => {
