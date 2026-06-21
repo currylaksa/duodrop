@@ -76,7 +76,10 @@ export class EncryptedReceiver {
     if (!this.meta) {
       this.meta = JSON.parse(decoder.decode(plain)) as FileMeta;
       this.handlers.onStart?.(this.meta);
-      if (final) this.handlers.onComplete?.(this.meta, new Uint8Array(0));
+      if (final) {
+        this.handlers.onComplete?.(this.meta, new Uint8Array(0));
+        this.reset();
+      }
       return;
     }
     this.received += plain.length;
@@ -84,11 +87,27 @@ export class EncryptedReceiver {
     if (this.handlers.onChunk) {
       // Streaming sink (phase 3): forward each chunk; never buffer the whole file.
       this.handlers.onChunk(plain);
-      if (final) this.handlers.onComplete?.(this.meta, EMPTY);
+      if (final) {
+        this.handlers.onComplete?.(this.meta, EMPTY);
+        this.reset();
+      }
       return;
     }
     this.chunks.push(plain);
-    if (final) this.handlers.onComplete?.(this.meta, concat(this.chunks));
+    if (final) {
+      this.handlers.onComplete?.(this.meta, concat(this.chunks));
+      this.reset();
+    }
+  }
+
+  // A queue sends each file as its own secretstream (own header). Clear per-file state on the
+  // FINAL frame so the next file's header starts a fresh decryptor instead of being decrypted
+  // as a chunk (which throws "ciphertext rejected").
+  private reset(): void {
+    this.decryptor = undefined;
+    this.meta = undefined;
+    this.chunks = [];
+    this.received = 0;
   }
 }
 

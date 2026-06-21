@@ -150,6 +150,9 @@ export class DuoDropController {
       },
       onComplete: () => {
         const id = receiveId;
+        // No receive is in flight until the next file's onStart; clearing this stops a stray
+        // post-completion error from mislabelling the file that just finished.
+        receiveId = '';
         const ready = sinkReady!;
         writeChain = writeChain
           .then(() => ready)
